@@ -81,7 +81,7 @@ whose metric is time-to-first-syllable.
 A `VoiceSessionRunner` owns the socket and drives turns directly, **reusing** `AdmissionService`
 + `AgentVersionService` (session open goes through the identical admission path),
 `RunStreamService.attach()` for the control-plane SSE (no new streaming code),
-`BackpressureService.admit()`, `ModelGateway`, `MemoryEngine`, `FrameworkAdapter.advance()`,
+`BackpressureService.admit()`, `ModelGateway`, `MemoryEngine`, `FrameworkAdapter.run()`,
 and `withTenantConnection`. It does **not** use `run_queue` or `RunLoop.drive()`.
 
 **What that costs, stated plainly:** two drive loops that can drift (mitigated structurally in

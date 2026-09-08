@@ -10,7 +10,7 @@ not a rough edge.
 |---|---|---|---|
 | 1 | Autonomous tool-using agents | **Yes** | — |
 | 2 | Long-running conversational | **Yes** | — |
-| 3 | Coding agents & SWE workflows | **Partly** | Artifacts, plan approval, sub-agents and MCP land, and the container's isolation flags are real. But the sandbox entrypoint is `sh -c cat` — it never executes tool logic — so no code has actually run in it |
+| 3 | Coding agents & SWE workflows | **Partly** | Planning, a scratch filesystem and structured output arrived with the DeepAgents migration; artifacts, plan approval, sub-agents and MCP land, and the container's isolation flags are real. But the sandbox entrypoint is `sh -c cat` — it never executes tool logic — so no code has actually run in it |
 | 4 | Multi-step workflows, background agents | **Yes** | — |
 | 5 | Human-in-the-loop | **Yes** | Routing an interaction to a channel (Slack, dashboard) is the consuming service's job |
 | 6 | Voice agents | **No** | The whole media plane (§12.2/§12.3). Phase 5 |
@@ -20,14 +20,14 @@ not a rough edge.
 
 | | Status |
 |---|---|
-| **01 · ap-executor (ephemeral)** | **Servable.** Inline specs, sync/async, webhook callback, effect contracts, cost per merchant, MCP tools with hash pinning, and a step-driven agent adapter with native tool calling |
+| **01 · ap-executor (ephemeral)** | **Servable.** Inline specs, sync/async, webhook callback, effect contracts, cost per merchant, MCP tools with hash pinning, and a real DeepAgents loop with native tool calling |
 | **02 · relay-agent-builder (conversational)** | **Servable.** Threads, turns, transcript, approvals, SSE resume, six memory tiers, artifacts for workflow drafts, and its six-stage pipeline as sub-agents. Cross-tenant sharing is now opt-in per namespace, decided by the consuming service, plus a skills registry and knowledge collections for the shared corpus |
-| **03 · coding agent** | **Not yet.** Artifacts, plan approval, sub-agents and MCP land, and the container's isolation envelope is correctly configured. But nothing executes inside it: the entrypoint is `sh -c cat`, which echoes the payload back. Needs a real executor, a purpose-built image, and per-profile egress rules |
+| **03 · coding agent** | **Not yet.** The tools it needs now exist — `write_todos`, `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` — plus artifacts, plan approval, sub-agents and MCP, and the container's isolation envelope is correctly configured. But nothing executes inside it: the entrypoint is `sh -c cat`, which echoes the payload back, and the filesystem tools operate on an in-memory projection rather than the sandbox. Needs a real executor, a purpose-built image, per-profile egress rules, and `BaseSandbox` wired to the container |
 
 ## Built and verified
 
 Artifacts with content-addressed dedup, version chains, legal hold and GC · sub-agent
-delegation with depth and cycle limits · a step-driven agent adapter · native tool calling
+delegation with depth and cycle limits · a real DeepAgents loop · native tool calling
 across three providers · MCP client with definition-hash pinning and tenant-scoped
 approval, over both streamable-HTTP and stdio · sandbox routing by declared profile ·
 Memory engine with six swappable seams (store, vector index, embedder, cache, relation

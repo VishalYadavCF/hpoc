@@ -151,18 +151,24 @@ provide implementations; domain code injects the token and never the class.
 export const FRAMEWORK_ADAPTER = Symbol('FrameworkAdapter');
 
 export interface FrameworkAdapter {
-  readonly id: string;                       // 'deep-agents' | 'echo'
-  /** Drives one increment. Returns the next durable step, never a whole run. */
-  advance(input: AdvanceInput): Promise<AdvanceOutput>;
+  readonly id: string;                       // 'deep-agents' | 'echo' | 'pipeline'
+  /** Drives the whole run. Every consequential action goes back through RunHost. */
+  run(session: RunSession): Promise<RunOutcome>;
 }
 ```
 
-`advance()` returning **one step** rather than running a loop is the central design choice of the
-adapter boundary: it is what lets the platform own checkpointing, cancellation, budget enforcement
-and the event log, while the framework owns reasoning. A framework that can only run to completion
-(as `deepagents`' `invoke()` does today) is wrapped with its callback stream translated into steps —
-which is precisely what consumer 01's `AgentTracer` already does, and why that code is the model
-for this adapter.
+**This reversed in 2026-09.** The port originally returned ONE STEP per call, on the reasoning that
+only the platform could then own checkpointing, cancellation, budget enforcement and the event log.
+That reasoning was sound about the goal and wrong about the mechanism: the cost of the step-at-a-time
+shape was reimplementing, worse, the message state machine, tool-call translation and planning that
+the framework already had — and the `deep-agents` adapter never called `createDeepAgent` at all.
+
+The guarantees did not leave. They moved DOWN, into `RunHost`: a framework reaches a model or a tool
+only through the platform, so the budget check, the lease fence, the effect contract, the step row
+and the event log all still run — inside the framework's loop instead of around it. What the platform
+gave up is deciding WHEN the next model call happens, which was never a thing it had an opinion about.
+
+See `ai-docs/decisions/0002-the-framework-drives-the-loop.md`.
 
 ---
 

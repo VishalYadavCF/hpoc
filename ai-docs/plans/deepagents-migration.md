@@ -1,5 +1,27 @@
 # Plan — stop reinventing, run on DeepAgents
 
+> **Status: done (2026-09-09).** All eleven phases landed, one commit each, from
+> `13889ce` to `HEAD`. Three things went differently from the plan and are recorded in
+> `ai-docs/decisions/0002-the-framework-drives-the-loop.md`:
+>
+> 1. **Open question 2 answered: the port stays.** `tsconfig.core.json` compiles
+>    `src/platform` + `src/domain` with `src/adapters` excluded, so §2.1's "core compiles
+>    with adapters removed" is enforced by the build. Dropping the port would break
+>    `npm run build:core`.
+> 2. **Phase 6 reversed.** Sub-agents did NOT replace `pipeline.adapter.ts`. DeepAgents'
+>    sub-agents run in-process; ours are separate runs with their own policy, budget and
+>    lifecycle (§13.3). Both are offered; the pipeline adapter stays as the only
+>    deterministic orchestrator.
+> 3. **Phase 9 partially declined.** `BaseSandbox` is not wired — it would grant shell
+>    execution that does not exist today, which is a capability increase rather than a
+>    free win.
+>
+> Seven defects surfaced along the way; the ADR lists them. The one worth repeating here:
+> the api and worker on `:3000` were still running pre-migration binaries, so every
+> HTTP-driven test had been passing against the OLD run loop. Restarting them turned a
+> green suite into eight failures, three of which were real bugs.
+
+
 ## The decision
 
 **DeepAgents runs the agent. Every time it asks "where do I store this?", we answer

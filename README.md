@@ -5,7 +5,7 @@ Requirements are in `ai-docs/pwd.md`; the design that follows from them is in
 `ai-docs/plans/lld.md`. This file is how to run it.
 
 **Status:** Phase 1 substrate, working end to end. A run is created, queued, claimed under
-a fenced lease, driven step by step through a framework adapter, checkpointed at every
+a fenced lease, driven through a framework adapter, checkpointed at every
 step boundary, streamed over SSE with resume, and accounted for per tenant.
 
 ---
