@@ -4,8 +4,10 @@ import {
   createHarnessProfile,
   createMemoryMiddleware,
   createSkillsMiddleware,
+  createSummarizationMiddleware,
 } from 'deepagents';
 import { tool } from '@langchain/core/tools';
+import { ToolStrategy } from 'langchain';
 import { Command, interrupt } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph';
 import { HumanMessage } from '@langchain/core/messages';
@@ -142,9 +144,39 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
               }),
             ]
           : []),
+        // Transcript compaction (§7). The platform's ContextEngine budgets RECALLED
+        // MEMORY and always has; nothing has ever bounded the transcript itself, because
+        // under the old adapter the transcript was rebuilt from scratch each step. Now
+        // that the framework owns it across a whole run, an agent doing forty tool calls
+        // grows its context until the provider refuses the request -- which reads as the
+        // agent breaking on exactly the hard tasks it was bought for.
+        //
+        // Gated on the same `compaction` flag as memory compaction, because §0.5 requires
+        // every compensating mechanism to be individually disableable: the harm of
+        // over-eager summarisation is invisible unless it can be turned off and measured.
+        ...(spec.context.compaction
+          ? [
+              createSummarizationMiddleware({
+                backend,
+                // Summarised through the SAME metered model. A summariser reaching a
+                // provider directly would be unbilled, unbudgeted reasoning (§9).
+                model: new HostChatModel(host),
+                trigger: { type: 'fraction', value: 0.8 },
+                keep: { type: 'messages', value: 20 },
+              }),
+            ]
+          : []),
       ],
       // §4.2 durability, on our database. This is the whole reason the migration was
       // possible: LangGraph does not care whose Postgres it is.
+      // Constrained decoding where the provider supports it, so a malformed answer is
+      // unrepresentable rather than merely detected after it was paid for.
+      // ToolStrategy rather than ProviderStrategy: it rides the tool-calling path every
+      // vendor supports and that `HostChatModel` already forwards, so structured output
+      // works on all three providers instead of only the one with a native mode.
+      ...(spec.responseSchema
+        ? { responseFormat: ToolStrategy.fromSchema(spec.responseSchema) }
+        : {}),
       checkpointer: this.checkpointer as BaseCheckpointSaver,
       name: `run-${session.runId}`,
     });

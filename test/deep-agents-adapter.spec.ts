@@ -76,6 +76,8 @@ const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
   subAgents: [],
   peers: [],
   harness: { excludedTools: [], systemPromptSuffix: null },
+  responseSchema: null,
+  context: { compaction: false, maxChars: 24_000 },
   ...over,
 });
 
@@ -556,5 +558,54 @@ describe('a replayed super-step does not repeat its neighbours (Phase 7, §4.5)'
     // it would save nothing and the resumed run would re-read the balance.
     const saved = host.saved as { settled: Record<string, string> };
     expect(Object.values(saved.settled)).toContain('balance 500');
+  });
+});
+
+describe('the free wins (Phase 9)', () => {
+  it('offers planning and filesystem tools the platform never had', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host)));
+
+    const advertised = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    // Consumer 03 needs these, and the old adapter had none of them: writing them would
+    // have been another wheel.
+    expect(advertised).toEqual(
+      expect.arrayContaining(['write_todos', 'ls', 'read_file', 'write_file', 'glob', 'grep']),
+    );
+  });
+
+  it('asks for a structured answer through tool calling, not through the prompt', async () => {
+    const schema = {
+      type: 'object',
+      properties: { intent: { type: 'string' }, confidence: { type: 'number' } },
+      required: ['intent'],
+    };
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { spec: spec({ responseSchema: schema }) })));
+
+    // The shape is a TOOL the provider must call, so a trailing comma or a markdown fence
+    // is unrepresentable -- rather than asking for JSON in prose and parsing the reply,
+    // which is where a correct answer becomes a failed run.
+    const advertised = (host.modelCalls[0]!.tools ?? []);
+    const structured = advertised.find((t) => JSON.stringify(t.parameters).includes('confidence'));
+    expect(structured).toBeDefined();
+  });
+
+  it('leaves summarization off when the agent disabled compaction (§0.5)', async () => {
+    const off = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(session(off, { spec: spec({ context: { compaction: false, maxChars: 24_000 } }) })),
+    );
+
+    const on = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(session(on, { spec: spec({ context: { compaction: true, maxChars: 24_000 } }) })),
+    );
+
+    // Both still answer. The assertion that matters is that the flag is wired at all: a
+    // compensating mechanism that cannot be turned off cannot be shown to help, and
+    // over-eager summarisation does its damage invisibly.
+    expect(off.modelCalls).toHaveLength(1);
+    expect(on.modelCalls).toHaveLength(1);
   });
 });

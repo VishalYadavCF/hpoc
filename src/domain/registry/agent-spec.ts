@@ -131,6 +131,17 @@ export const agentSpecSchema = z
       .default({ modelResponses: false, ttlSeconds: 300 }),
 
     /**
+     * JSON Schema the final answer must satisfy.
+     *
+     * The platform had no way to say this before. A consuming service that needed a shape
+     * -- and a workflow builder needs one for every node it emits -- had to ask for JSON in
+     * the prompt and parse whatever came back, which is where a trailing comma or a
+     * markdown fence turns a correct answer into a failed run. Handed to the framework,
+     * which uses the provider's own structured-output mechanism where one exists.
+     */
+    responseSchema: z.record(z.string(), z.unknown()).nullable().default(null),
+
+    /**
      * Per-model prompt tuning, applied AFTER the resolved system prompt (§17.2).
      *
      * Separate from `systemPrompt` because the two are versioned by different people on

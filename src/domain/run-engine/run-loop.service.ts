@@ -298,6 +298,8 @@ export class RunLoop {
         subAgents: subAgents.map((a) => ({ alias: a.alias, description: a.description })),
         peers: version.peers.map((p) => ({ alias: p.alias, description: null })),
         harness: version.harness,
+        responseSchema: version.responseSchema,
+        context: { compaction: version.context.compaction, maxChars: version.context.maxChars },
       },
       input: run.input,
       state: restored?.adapterState ?? null,

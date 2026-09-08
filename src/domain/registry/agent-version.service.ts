@@ -72,6 +72,8 @@ export interface ResolvedVersion {
    * files" was, until now, unsayable.
    */
   harness: HarnessShaping;
+  /** JSON Schema the final answer must satisfy, or null when the agent declared none. */
+  responseSchema: Record<string, unknown> | null;
 }
 
 export interface HarnessShaping {
@@ -433,6 +435,7 @@ export class AgentVersionService {
       cache?: { modelResponses?: boolean; ttlSeconds?: number };
       context?: { maxChars?: number; reserveForAnswer?: number; compaction?: boolean; eviction?: boolean };
       harness?: { systemPromptSuffix?: string | null };
+      responseSchema?: Record<string, unknown> | null;
     };
 
     return {
@@ -474,6 +477,7 @@ export class AgentVersionService {
         eviction: spec.context?.eviction ?? true,
       },
       harness: harnessShaping(policyDocument, spec),
+      responseSchema: spec.responseSchema ?? null,
     };
   }
 }

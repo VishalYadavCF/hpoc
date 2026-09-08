@@ -104,6 +104,24 @@ export interface AgentSpecView {
    * from its prompt, not a boundary from its sandbox.
    */
   harness: HarnessShapingView;
+  /**
+   * JSON Schema the final answer must satisfy, or null.
+   *
+   * Advice to the framework, not a validator the platform runs. A framework with a
+   * provider-native structured-output mode should use it -- constrained decoding cannot
+   * emit malformed JSON in the first place, which is strictly better than parsing and
+   * rejecting after the tokens are already paid for.
+   */
+  responseSchema: Record<string, unknown> | null;
+  /**
+   * §7 context management, per-agent and individually disableable (§0.5).
+   *
+   * `compaction` reaches the framework because the framework now owns the transcript --
+   * the platform can no longer summarise something it does not hold. Keeping the flag
+   * meaningful matters more than where it is honoured: a mechanism that cannot be turned
+   * off cannot be shown to help.
+   */
+  context: { compaction: boolean; maxChars: number };
 }
 
 export interface HarnessShapingView {
