@@ -34,8 +34,41 @@ import { BudgetService, type BudgetScope } from '../governance/budget.service.js
 import {
   FRAMEWORK_ADAPTER,
   type FrameworkAdapter,
-  type Observation,
+  type HostModelRequest,
+  type HostModelResult,
+  type HostToolOutcome,
+  type RunHost,
 } from '../ports/framework-adapter.port.js';
+
+/**
+ * What a step produced, in the platform's own vocabulary.
+ *
+ * Local rather than exported on the port: since the framework drives the loop, no adapter
+ * ever sees one of these. They exist so the resume paths -- which settle a step the
+ * framework is no longer waiting inside -- can hand a value back without inventing a
+ * shape per call site.
+ */
+interface Observation {
+  kind: 'model_result' | 'tool_result' | 'tool_error' | 'delegation_result' | 'delegation_error' | 'none';
+  content?: unknown;
+}
+
+/**
+ * Raised by the host when the platform has decided this run stops now.
+ *
+ * Thrown AND paired with an aborted signal, deliberately. A framework's tool node
+ * typically converts a thrown error into a message and keeps reasoning, so the throw
+ * alone would be absorbed; the signal is what stops the next model call. Whichever the
+ * framework honours, `drive()` re-checks `host.stopped` after `run()` returns and fails
+ * the run itself -- so ignoring both only wastes the framework's time, never the
+ * platform's ceiling.
+ */
+class RunStopped extends Error {
+  constructor(readonly detail: string) {
+    super(detail);
+    this.name = 'RunStopped';
+  }
+}
 
 /**
  * Above this, a step's output goes to the artifact store instead of into the row, the
@@ -192,30 +225,23 @@ export class RunLoop {
     // query each time.
     const knowledge = await this.searchKnowledge(run, version);
 
-    let state: unknown = restored?.adapterState ?? null;
-    let observation: Observation = restored
-      ? { kind: 'none', content: restored.lastObservation }
-      : { kind: 'none' };
-    let stepSeq = restored?.stepSeq ?? 0;
-    let costMicros = Number(run.cost_micros);
-
     await this.transition(
       run, version, lease,
       restored ? EventType.RunResumed : EventType.RunStarted,
-      { resumedFromStep: stepSeq || null },
+      { resumedFromStep: restored?.stepSeq ?? null },
     );
 
-    // A run resumed from an approval gate must FINISH the action it was gated on. Asking
-    // the adapter for its next step would skip it: the adapter's state already advanced
-    // past the tool call, so it would answer `complete` and the approved side effect
-    // would never happen.
+    // A run resumed from a suspension must FINISH the thing it was suspended on before
+    // the framework is asked to reason again. Each of these settles the open step and
+    // yields the value the framework has been blocked waiting for.
+    let resume: { value: unknown; ref: string | null } | null = null;
+
     if (restored?.pendingAction) {
       const resolved = await this.resumePendingAction(
         run, version, lease, restored.pendingAction, bindings,
       );
       if (resolved.kind === 'halt') return;
-      observation = resolved.observation;
-      state = restored.adapterState;
+      resume = { value: resolved.observation.content, ref: restored.pendingAction.toolRef };
     }
 
     // §4.6: a resumed parent reconciles children that settled while it was down. The
@@ -224,8 +250,7 @@ export class RunLoop {
     if (restored?.pendingDelegation) {
       const resolved = await this.resumeDelegation(run, version, lease, restored.pendingDelegation);
       if (resolved.kind === 'halt') return;
-      observation = resolved.observation;
-      state = restored.adapterState;
+      resume = { value: resolved.observation.content, ref: restored.pendingDelegation.alias };
     }
 
     // A peer task settles the same way, through a different reader. A LOCAL peer's
@@ -234,99 +259,215 @@ export class RunLoop {
     if (restored?.pendingPeerCall) {
       const resolved = await this.resumePeerCall(run, version, lease, restored.pendingPeerCall);
       if (resolved.kind === 'halt') return;
-      observation = resolved.observation;
-      state = restored.adapterState;
+      resume = { value: resolved.observation.content, ref: restored.pendingPeerCall.alias };
     }
 
-    for (;;) {
-      if (stepSeq >= version.maxSteps) {
-        await this.fail(run, version, lease, `Exceeded maxSteps (${version.maxSteps})`);
-        return;
-      }
-      if (version.maxCostMicros !== null && costMicros >= Number(version.maxCostMicros)) {
-        await this.fail(run, version, lease, `Exceeded maxCost (${version.maxCostMicros} micros)`);
-        return;
-      }
-      // §5.2: the per-version ceiling above is this run's own budget; these are the
-      // tenancy levels ABOVE it. Checked every step, not only at admission, because spend
-      // a namespace never anticipated can accrue mid-run long after the run was admitted.
-      try {
-        await this.budgets.checkNotExceeded(run.org_id, this.budgetScopes(run));
-      } catch (e) {
-        await this.fail(run, version, lease, (e as Error).message);
-        return;
-      }
+    const host = this.makeHost(run, version, lease, bindings, subAgents, restored?.stepSeq ?? 0);
 
-      const advance = await adapter.advance({
-        runId: run.id,
-        spec: {
-          modelRef: version.modelId,
-          systemPrompt: version.systemPrompt,
-          tools: bindings.map((b) => ({
-            ref: b.ref,
-            description: b.description,
-            inputSchema: b.inputSchema,
-          })),
-          maxSteps: version.maxSteps,
-          recalled,
-          skills: version.skills.map((sk) => ({
-            name: sk.name,
-            version: sk.version,
-            whenToUse: sk.whenToUse,
-            instructions: sk.instructions,
-          })),
-          knowledge,
-          subAgents: subAgents.map((a) => ({ alias: a.alias, description: null })),
-          peers: version.peers.map((p) => ({ alias: p.alias, description: null })),
-        },
-        input: run.input,
-        stepSeq,
-        state,
-        observation,
-      });
+    const outcome = await adapter.run({
+      runId: run.id,
+      spec: {
+        modelRef: version.modelId,
+        systemPrompt: version.systemPrompt,
+        tools: bindings.map((b) => ({
+          ref: b.ref,
+          description: b.description,
+          inputSchema: b.inputSchema,
+        })),
+        maxSteps: version.maxSteps,
+        recalled,
+        skills: version.skills.map((sk) => ({
+          name: sk.name,
+          version: sk.version,
+          whenToUse: sk.whenToUse,
+          instructions: sk.instructions,
+        })),
+        knowledge,
+        subAgents: subAgents.map((a) => ({ alias: a.alias, description: null })),
+        peers: version.peers.map((p) => ({ alias: p.alias, description: null })),
+      },
+      input: run.input,
+      state: restored?.adapterState ?? null,
+      resume,
+      signal: host.signal,
+      host,
+    });
 
-      const action = advance.action;
-      state = advance.state;
-      stepSeq += 1;
-
-      if (action.type === 'complete') {
-        // stepSeq was incremented for the terminal advance itself, which persists no
-        // step row. step_count must equal the number of rows in `steps`, or every
-        // consumer that reconciles the two sees a phantom.
-        await this.complete(run, version, lease, action.output, stepSeq - 1);
-        return;
-      }
-      if (action.type === 'fail') {
-        await this.fail(run, version, lease, action.message);
-        return;
-      }
-
-      const outcome = await this.uow.run(async (tx) => {
-        // Fencing, in the same transaction as every durable write that follows.
-        await this.queue.assertHeld(tx, lease);
-
-        if (action.type === 'model_call') {
-          return this.runModelStep(tx, run, version, lease, stepSeq, action, state, bindings);
-        }
-        if (action.type === 'peer_call') {
-          return this.runPeerCallStep(tx, run, version, lease, stepSeq, action, state);
-        }
-        if (action.type === 'delegate') {
-          return this.runDelegationStep(tx, run, version, lease, stepSeq, action, state, subAgents);
-        }
-        return this.runToolStep(tx, run, version, lease, stepSeq, action, state, bindings);
-      });
-
-      if (outcome.kind === 'halt') return;
-      observation = outcome.observation;
-      costMicros += outcome.costMicros;
-      // Recorded after the step's own transaction committed: a budget is a governance
-      // ceiling (§5.2), not the ledger of record for the spend itself -- `runs.cost_micros`
-      // is, and that already committed. Losing this increment to a crash under-counts a
-      // ceiling rather than losing money.
-      await this.budgets.record(run.org_id, this.budgetScopes(run), outcome.costMicros);
-      await this.events.notify(this.db, run.id, outcome.seq);
+    // Checked BEFORE the outcome, and unconditionally. A framework that swallowed the
+    // stop -- absorbed the throw into a tool message, ignored the signal, then answered
+    // anyway -- must not be able to turn an exceeded budget into a completed run. The
+    // platform's ceiling is decided here, not by how gracefully the framework exits.
+    if (host.stopped) {
+      await this.fail(run, version, lease, host.stopped);
+      return;
     }
+    if (host.suspended) {
+      // The host already wrote the interaction or the child run, moved the run to
+      // `waiting` and left the queue. Whatever the framework returned afterwards is
+      // stale; returning here is what stops it overwriting a suspension with an answer.
+      return;
+    }
+    if (outcome.type === 'suspended') return;
+    if (outcome.type === 'fail') {
+      await this.fail(run, version, lease, outcome.message);
+      return;
+    }
+    await this.complete(run, version, lease, outcome.output, host.stepSeq);
+  }
+
+  /**
+   * Builds the platform's side of the framework boundary for ONE run.
+   *
+   * Every method here is a step the framework asked for and the platform performed: same
+   * transaction, same fencing, same effect contract, same step row and same events the
+   * old `advance()` dispatch produced. What moved is who decides the ORDER -- which is the
+   * whole of the change, and none of the guarantees.
+   */
+  private makeHost(
+    run: RunRow,
+    version: ResolvedVersion,
+    lease: Lease,
+    bindings: ToolBinding[],
+    subAgents: { alias: string; sub_agent_id: string }[],
+    fromStep: number,
+  ) {
+    const controller = new AbortController();
+    const host = {
+      signal: controller.signal,
+      stepSeq: fromStep,
+      costMicros: Number(run.cost_micros),
+      /** Set once the platform has decided the run must end; the reason it will fail with. */
+      stopped: null as string | null,
+      /** Set once a step has parked the run in `waiting`; nothing further may be written. */
+      suspended: false,
+      /**
+       * The framework's own opaque state, written into the next checkpoint.
+       *
+       * Never inspected. §0.3 keeps framework shapes out of the persisted model, and the
+       * moment the platform branches on a field in here it has a second framework
+       * contract it did not mean to sign.
+       */
+      frameworkState: null as unknown,
+
+      stop: (reason: string): never => {
+        host.stopped ??= reason;
+        controller.abort();
+        throw new RunStopped(reason);
+      },
+
+      /**
+       * The checks that used to sit at the top of the drive loop.
+       *
+       * They did not become weaker by moving: the framework cannot reach a model or a tool
+       * except through the two methods below, and both call this first. A framework that
+       * loops without doing either spends nothing, which is the only case this no longer
+       * catches -- and there is nothing to catch.
+       */
+      guard: async (): Promise<void> => {
+        if (host.stopped) throw new RunStopped(host.stopped);
+        if (host.stepSeq >= version.maxSteps) {
+          host.stop(`Exceeded maxSteps (${version.maxSteps})`);
+        }
+        if (version.maxCostMicros !== null && host.costMicros >= Number(version.maxCostMicros)) {
+          host.stop(`Exceeded maxCost (${version.maxCostMicros} micros)`);
+        }
+        // §5.2: the per-version ceiling above is this run's own budget; these are the
+        // tenancy levels ABOVE it. Checked every step, not only at admission, because
+        // spend a namespace never anticipated can accrue mid-run long after the run was
+        // admitted.
+        try {
+          await this.budgets.checkNotExceeded(run.org_id, this.budgetScopes(run));
+        } catch (e) {
+          host.stop((e as Error).message);
+        }
+      },
+
+      /** Runs one step inside its own transaction, fenced, and settles the bookkeeping. */
+      step: async <T>(
+        fn: (tx: Tx, stepSeq: number) => Promise<{ result: T; costMicros: number; seq: number | null }>,
+      ): Promise<T> => {
+        await host.guard();
+        const stepSeq = host.stepSeq + 1;
+        const out = await this.uow.run(async (tx) => {
+          // Fencing, in the same transaction as every durable write that follows.
+          await this.queue.assertHeld(tx, lease);
+          return fn(tx, stepSeq);
+        });
+        host.stepSeq = stepSeq;
+        host.costMicros += out.costMicros;
+        // Recorded after the step's own transaction committed: a budget is a governance
+        // ceiling (§5.2), not the ledger of record for the spend itself -- `runs.cost_micros`
+        // is, and that already committed. Losing this increment to a crash under-counts a
+        // ceiling rather than losing money.
+        await this.budgets.record(run.org_id, this.budgetScopes(run), out.costMicros);
+        if (out.seq !== null) await this.events.notify(this.db, run.id, out.seq);
+        return out.result;
+      },
+    };
+
+    const api: RunHost = {
+      saveState: (state) => {
+        host.frameworkState = state;
+      },
+
+      callModel: (request: HostModelRequest) =>
+        host.step(async (tx, stepSeq) => {
+          const r = await this.runModelStep(
+            tx, run, version, lease, stepSeq, request, bindings, host.frameworkState,
+          );
+          return { result: r.result, costMicros: r.costMicros, seq: r.seq };
+        }),
+
+      callTool: (toolRef, args) =>
+        host.step(async (tx, stepSeq) => {
+          const r = await this.runToolStep(
+            tx, run, version, lease, stepSeq, { toolRef, args }, bindings, host.frameworkState,
+          );
+          if (r.kind === 'halt') host.suspended = true;
+          return {
+            result:
+              r.kind === 'halt'
+                ? ({ kind: 'suspended', reason: 'approval', ref: toolRef } as HostToolOutcome)
+                : r.outcome,
+            costMicros: 0,
+            seq: r.kind === 'halt' ? null : r.seq,
+          };
+        }),
+
+      delegate: (alias, input) =>
+        host.step(async (tx, stepSeq) => {
+          const r = await this.runDelegationStep(
+            tx, run, version, lease, stepSeq, { alias, input }, subAgents, host.frameworkState,
+          );
+          if (r.kind === 'halt') host.suspended = true;
+          return {
+            result:
+              r.kind === 'halt'
+                ? ({ kind: 'suspended', reason: 'delegation', ref: alias } as HostToolOutcome)
+                : ({ kind: 'error', message: String(r.observation.content) } as HostToolOutcome),
+            costMicros: 0,
+            seq: r.kind === 'halt' ? null : r.seq,
+          };
+        }),
+
+      peerCall: (alias, input) =>
+        host.step(async (tx, stepSeq) => {
+          const r = await this.runPeerCallStep(
+            tx, run, version, lease, stepSeq, { alias, input }, host.frameworkState,
+          );
+          if (r.kind === 'halt') host.suspended = true;
+          return {
+            result:
+              r.kind === 'halt'
+                ? ({ kind: 'suspended', reason: 'peer_call', ref: alias } as HostToolOutcome)
+                : ({ kind: 'error', message: String(r.observation.content) } as HostToolOutcome),
+            costMicros: 0,
+            seq: r.kind === 'halt' ? null : r.seq,
+          };
+        }),
+    };
+
+    return Object.assign(api, host);
   }
 
   /**
@@ -660,10 +801,10 @@ export class RunLoop {
     version: ResolvedVersion,
     lease: Lease,
     stepSeq: number,
-    action: { type: 'delegate'; alias: string; input: unknown },
-    state: unknown,
+    action: { alias: string; input: unknown },
     subAgents: { alias: string; sub_agent_id: string }[],
-  ): Promise<{ kind: 'halt' } | { kind: 'continue'; observation: Observation; costMicros: number; seq: number }> {
+    frameworkState: unknown = null,
+  ): Promise<{ kind: 'halt' } | { kind: 'continue'; observation: Observation; seq: number }> {
     const step = await this.openStep(tx, run, stepSeq, 'delegation', {
       alias: action.alias,
       input: action.input,
@@ -675,7 +816,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: `unknown sub-agent ${action.alias}` },
-        costMicros: 0,
         seq,
       };
     }
@@ -691,7 +831,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: 'delegation depth exceeded' },
-        costMicros: 0,
         seq,
       };
     }
@@ -706,7 +845,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: 'delegation cycle refused' },
-        costMicros: 0,
         seq,
       };
     }
@@ -762,7 +900,7 @@ export class RunLoop {
       stepSeq,
       durability: version.durability,
       state: {
-        adapterState: state,
+        adapterState: frameworkState,
         lastObservation: null,
         stepSeq,
         pendingDelegation: { stepId: step.id, alias: action.alias, childRunId: child.id },
@@ -790,9 +928,9 @@ export class RunLoop {
     version: ResolvedVersion,
     lease: Lease,
     stepSeq: number,
-    action: { type: 'peer_call'; alias: string; input: unknown },
-    state: unknown,
-  ): Promise<{ kind: 'halt' } | { kind: 'continue'; observation: Observation; costMicros: number; seq: number }> {
+    action: { alias: string; input: unknown },
+    frameworkState: unknown = null,
+  ): Promise<{ kind: 'halt' } | { kind: 'continue'; observation: Observation; seq: number }> {
     const step = await this.openStep(tx, run, stepSeq, 'peer_call', {
       alias: action.alias,
       input: action.input,
@@ -804,7 +942,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: `unknown peer ${action.alias}` },
-        costMicros: 0,
         seq,
       };
     }
@@ -821,7 +958,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: 'delegation depth exceeded' },
-        costMicros: 0,
         seq,
       };
     }
@@ -834,7 +970,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: 'peer cycle refused' },
-        costMicros: 0,
         seq,
       };
     }
@@ -850,7 +985,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: `peer ${peer.name} is ${peer.status}` },
-        costMicros: 0,
         seq,
       };
     }
@@ -893,7 +1027,6 @@ export class RunLoop {
       return {
         kind: 'continue',
         observation: { kind: 'delegation_error', content: (e as Error).message },
-        costMicros: 0,
         seq,
       };
     }
@@ -939,7 +1072,7 @@ export class RunLoop {
       stepSeq,
       durability: version.durability,
       state: {
-        adapterState: state,
+        adapterState: frameworkState,
         lastObservation: null,
         stepSeq,
         pendingPeerCall: {
@@ -1137,31 +1270,46 @@ export class RunLoop {
     version: ResolvedVersion,
     lease: Lease,
     stepSeq: number,
-    action: { type: 'model_call'; prompt: string; systemPrompt?: string | null },
-    state: unknown,
+    request: HostModelRequest,
     bindings: ToolBinding[] = [],
-  ): Promise<{ kind: 'continue'; observation: Observation; costMicros: number; seq: number }> {
+    frameworkState: unknown = null,
+  ): Promise<{ result: HostModelResult; costMicros: number; seq: number }> {
     const startedAt = Date.now();
-    const step = await this.openStep(tx, run, stepSeq, 'model_call', { prompt: action.prompt });
+    // The LAST turn is what the step row records as its input. The full transcript is
+    // already reconstructible from the preceding steps, and copying it into every step
+    // would make `steps.input` grow quadratically in the length of the run.
+    const asked = request.messages[request.messages.length - 1]?.content ?? '';
+    const step = await this.openStep(tx, run, stepSeq, 'model_call', {
+      prompt: asked,
+      turns: request.messages.length,
+    });
 
     const result = await this.gateway.complete({
       tx,
       modelId: version.modelId,
       agentDataClass: version.dataClass,
       request: {
-        prompt: action.prompt,
-        systemPrompt: action.systemPrompt ?? version.systemPrompt,
+        prompt: asked,
+        messages: request.messages,
+        systemPrompt: request.systemPrompt ?? version.systemPrompt,
         // Native tool schemas, so the model asks for a tool through the provider's own
         // mechanism rather than by emitting text a parser has to interpret.
-        ...(bindings.length > 0
-          ? {
-              tools: bindings.map((b) => ({
-                name: b.ref,
-                description: b.description ?? `Invoke ${b.ref}`,
-                parameters: (b.inputSchema as Record<string, unknown>) ?? { type: 'object' },
-              })),
-            }
-          : {}),
+        //
+        // The framework's own declaration wins when it made one: it knows about tools the
+        // platform does not (planning, scratch filesystem), and advertising only the
+        // bound set would leave those permanently invisible to the model. Advertising is
+        // not authorisation -- `runToolStep` still refuses anything unbound.
+        ...(request.tools?.length
+          ? { tools: request.tools }
+          : bindings.length > 0
+            ? {
+                tools: bindings.map((b) => ({
+                  name: b.ref,
+                  description: b.description ?? `Invoke ${b.ref}`,
+                  parameters: (b.inputSchema as Record<string, unknown>) ?? { type: 'object' },
+                })),
+              }
+            : {}),
       },
       orgId: run.org_id,
       runId: run.id,
@@ -1237,20 +1385,25 @@ export class RunLoop {
       },
     });
 
-    await this.settleStep(tx, run, version, lease, stepSeq, state, {
+    await this.settleStep(tx, run, version, lease, stepSeq, frameworkState, {
       kind: 'model_result',
       content: result.text,
     }, result.costMicros);
 
     return {
-      kind: 'continue',
-      observation: {
-        kind: 'model_result',
-        // Tool calls travel WITH the text: an adapter that only reads text would
-        // otherwise see an empty answer and complete, silently dropping the request.
-        content: result.toolCalls?.length
-          ? { text: result.text, toolCalls: result.toolCalls }
-          : result.text,
+      result: {
+        text: result.text,
+        // Tool calls travel WITH the text. A framework reading only the text would see an
+        // empty answer and finish, silently dropping the request the model just made.
+        toolCalls: (result.toolCalls ?? []).map((c, i) => ({
+          // An id is REQUIRED downstream: every vendor pairs a tool result to its request
+          // by id, so one synthesised here beats one invented per provider adapter.
+          id: c.id ?? `call_${stepSeq}_${i}`,
+          name: c.name,
+          args: c.args,
+        })),
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
       },
       costMicros: result.costMicros,
       seq,
@@ -1263,11 +1416,11 @@ export class RunLoop {
     version: ResolvedVersion,
     lease: Lease,
     stepSeq: number,
-    action: { type: 'tool_call'; toolRef: string; args: Record<string, unknown> },
-    state: unknown,
+    action: { toolRef: string; args: Record<string, unknown> },
     bindings: ToolBinding[],
+    frameworkState: unknown = null,
   ): Promise<
-    | { kind: 'continue'; observation: Observation; costMicros: number; seq: number }
+    | { kind: 'continue'; outcome: HostToolOutcome; seq: number }
     | { kind: 'halt' }
   > {
     const startedAt = Date.now();
@@ -1285,8 +1438,7 @@ export class RunLoop {
       );
       return {
         kind: 'continue',
-        observation: { kind: 'tool_error', content: `unknown tool ${action.toolRef}` },
-        costMicros: 0,
+        outcome: { kind: 'error', message: `unknown tool ${action.toolRef}` },
         seq,
       };
     }
@@ -1316,7 +1468,9 @@ export class RunLoop {
     if (outcome.kind === 'needs_approval') {
       // The run suspends into `waiting` -- the single suspension state §4.1 uses for
       // human interaction, peer delegation and external waits alike.
-      await this.suspendForApproval(tx, run, version, step.id, binding.ref, stepSeq, state, action.args);
+      await this.suspendForApproval(
+        tx, run, version, step.id, binding.ref, stepSeq, action.args, frameworkState,
+      );
       await this.queue.dequeue(tx, run.id);
       return { kind: 'halt' };
     }
@@ -1325,8 +1479,7 @@ export class RunLoop {
       const seq = await this.failStep(tx, run, version, step.id, outcome.error.message);
       return {
         kind: 'continue',
-        observation: { kind: 'tool_error', content: outcome.error.message },
-        costMicros: 0,
+        outcome: { kind: 'error', message: outcome.error.message },
         seq,
       };
     }
@@ -1368,17 +1521,12 @@ export class RunLoop {
       payload: { toolRef: binding.ref, output: offloaded.inline, cached: outcome.cached },
     });
 
-    await this.settleStep(tx, run, version, lease, stepSeq, state, {
+    await this.settleStep(tx, run, version, lease, stepSeq, frameworkState, {
       kind: 'tool_result',
       content: outcome.output,
     }, 0);
 
-    return {
-      kind: 'continue',
-      observation: { kind: 'tool_result', content: outcome.output },
-      costMicros: 0,
-      seq,
-    };
+    return { kind: 'continue', outcome: { kind: 'ok', output: outcome.output }, seq };
   }
 
   private async openStep(
@@ -1432,12 +1580,12 @@ export class RunLoop {
     version: ResolvedVersion,
     lease: Lease,
     stepSeq: number,
-    adapterState: unknown,
+    frameworkState: unknown,
     observation: Observation,
     costMicros: number,
   ): Promise<void> {
     const state: CheckpointState = {
-      adapterState,
+      adapterState: frameworkState,
       lastObservation: observation.content ?? null,
       stepSeq,
     };
@@ -1466,8 +1614,8 @@ export class RunLoop {
     stepId: string,
     toolRef: string,
     stepSeq: number,
-    adapterState: unknown,
     toolArgs: Record<string, unknown>,
+    frameworkState: unknown,
   ): Promise<void> {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const chain = (run.delegation_chain as { runId: string; principalId?: string }[] | null) ?? [];
@@ -1515,7 +1663,7 @@ export class RunLoop {
       stepSeq,
       durability: version.durability,
       state: {
-        adapterState,
+        adapterState: frameworkState,
         lastObservation: null,
         stepSeq,
         pendingAction: {

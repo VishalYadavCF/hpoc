@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { AIMessageChunk, BaseMessage } from '@langchain/core/messages';
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
@@ -163,10 +163,45 @@ export class GoogleProvider extends LangChainProvider {
   }
 }
 
+/**
+ * The transcript, preserving tool-call structure when the caller supplied it.
+ *
+ * `request.messages` wins over `request.prompt` because a reasoning loop's history is
+ * structured: an assistant turn carries `tool_calls` and each answering turn carries the
+ * matching `tool_call_id`. Every vendor validates that pairing, so a ToolMessage without
+ * its AIMessage is a 400 rather than a degraded answer -- which is the failure mode worth
+ * having, since the alternative is a model quietly re-answering a question it already
+ * has the result for.
+ */
 function messagesFor(request: ModelRequest): BaseMessage[] {
   const messages: BaseMessage[] = [];
   if (request.systemPrompt) messages.push(new SystemMessage(request.systemPrompt));
-  messages.push(new HumanMessage(request.prompt));
+
+  if (!request.messages?.length) {
+    messages.push(new HumanMessage(request.prompt));
+    return messages;
+  }
+
+  for (const m of request.messages) {
+    if (m.role === 'user') {
+      messages.push(new HumanMessage(m.content));
+    } else if (m.role === 'tool') {
+      messages.push(
+        new ToolMessage({ content: m.content, tool_call_id: m.toolCallId ?? 'unknown' }),
+      );
+    } else {
+      messages.push(
+        new AIMessage({
+          content: m.content,
+          tool_calls: (m.toolCalls ?? []).map((c) => ({
+            id: c.id ?? 'unknown',
+            name: c.name,
+            args: c.args,
+          })),
+        }),
+      );
+    }
+  }
   return messages;
 }
 

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { EchoAdapter } from './framework/echo/echo.adapter.js';
 import { PipelineAdapter } from './framework/pipeline/pipeline.adapter.js';
 import { DeepAgentsAdapter } from './framework/deep-agents/deep-agents.adapter.js';
+import { PostgresCheckpointSaver } from './framework/deep-agents/postgres.checkpoint-saver.js';
 import { EchoProvider } from './providers/echo.provider.js';
 import {
   AnthropicProvider,
@@ -60,6 +61,7 @@ import type { ModelProvider } from '../domain/ports/model-provider.port.js';
     EchoAdapter,
     PipelineAdapter,
     DeepAgentsAdapter,
+    PostgresCheckpointSaver,
     EchoProvider,
     OpenAiCompatibleProvider,
     AnthropicProvider,

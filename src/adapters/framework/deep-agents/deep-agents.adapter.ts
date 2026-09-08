@@ -1,244 +1,353 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { createDeepAgent } from 'deepagents';
+import { tool } from '@langchain/core/tools';
+import { Command, interrupt } from '@langchain/langgraph';
+import type { BaseCheckpointSaver } from '@langchain/langgraph';
+import { HumanMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
 import type {
-  AdvanceInput,
-  AdvanceOutput,
   FrameworkAdapter,
-  NextAction,
+  RunHost,
+  RunOutcome,
+  RunSession,
+  SkillHandle,
 } from '../../../domain/ports/framework-adapter.port.js';
-
-interface Message {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
-}
-
-interface DeepAgentsState {
-  messages: Message[];
-  /** Guards against a framework that never stops proposing tool calls. */
-  toolCalls: number;
-}
-
-const MAX_TOOL_CALLS = 20;
+import { PostgresCheckpointSaver } from './postgres.checkpoint-saver.js';
+import { HostChatModel } from './host-chat-model.js';
 
 /**
- * A `deepagents`-style reasoning loop, driven one step at a time.
+ * The real `deepagents` binding.
  *
- * ## Why this is not a call to `invoke()`
+ * ## What this replaced, and why
  *
- * `createDeepAgent(...).invoke()` runs a whole agent to completion inside one process.
- * That is incompatible with everything the platform guarantees: no step boundary to
- * checkpoint at, no point to enforce a budget, nothing to cancel, and a crash loses the
- * run. §2.1 puts the reasoning loop BELOW the platform for exactly this reason.
+ * The previous version of this file was a 244-line message state machine with a regex
+ * tool-call parser and a hardcoded 20-call ceiling. It never called `createDeepAgent`.
+ * It was written that way to keep the platform in charge of every step -- and the cost of
+ * that was reimplementing, worse, the one thing the framework is for. Native tool calling
+ * became `TOOL name {json}` parsed out of prose; planning, sub-agents, skills, filesystem
+ * and summarization simply did not exist.
  *
- * So the adapter inverts it. The platform asks for one action; this returns one action and
- * its own state; the platform executes it, persists a step, checkpoints, and asks again
- * with the result. The framework keeps reasoning, the platform keeps durability.
+ * So the loop moved. `createDeepAgent` reasons; every action with a CONSEQUENCE still goes
+ * back through `RunHost`, where the budget check, the lease fence, the effect contract,
+ * the step row and the event log all still happen. The platform gave up deciding when the
+ * next model call is made, which it never had an opinion about, and kept everything it
+ * was actually enforcing.
  *
- * ap-executor's node already does the inverting half with its `AgentTracer` -- translating
- * a callback stream into records. This makes that idea the contract rather than an
- * observability side-effect.
+ * ## Where each guarantee ended up
  *
- * ## Honest scope
+ * | Guarantee            | Now enforced by                                     |
+ * |----------------------|-----------------------------------------------------|
+ * | residency, cost, cache, fallback | `HostChatModel` -> `host.callModel`     |
+ * | effect contracts, idempotency    | tool wrapper -> `host.callTool`         |
+ * | per-step budget, lease fencing   | `RunHost.step` around both              |
+ * | maxSteps                         | `recursionLimit` AND the host's counter |
+ * | cancellation                     | `session.signal` into `invoke`          |
+ * | durability                       | `PostgresCheckpointSaver` (§4.2)        |
+ * | suspension (§13.3, §14)          | LangGraph `interrupt()` + `Command`     |
  *
- * The message-state machine, tool-call translation and the model/tool/complete decision are
- * real. `deepagents`' own graph executor is NOT invoked: driving a run-to-completion
- * executor one step at a time means running it repeatedly and discarding all but the next
- * action, which burns a model call per step. Wiring its streaming callbacks into this shape
- * is the remaining work, and it needs the consumer's real prompts to be worth testing
- * against. Until then this is a faithful loop, not a `deepagents` binding.
+ * ## The one thing that is genuinely different
+ *
+ * DeepAgents' built-in middleware tools -- planning, the scratch filesystem -- execute
+ * inside the graph and never reach `callTool`, so they produce no `steps` row. That is
+ * correct for what they are: they mutate the agent's own working state and touch nothing
+ * outside the process. Anything that leaves the process is a bound tool and is recorded.
  */
 @Injectable()
 export class DeepAgentsAdapter implements FrameworkAdapter {
   readonly id = 'deep-agents';
   private readonly log = new Logger(DeepAgentsAdapter.name);
 
-  async advance(input: AdvanceInput): Promise<AdvanceOutput> {
-    const state = (input.state as DeepAgentsState | null) ?? { messages: seed(input), toolCalls: 0 };
-    const messages = [...state.messages];
+  constructor(@Inject(PostgresCheckpointSaver) private readonly checkpointer: PostgresCheckpointSaver) {}
 
-    // Fold the previous step's result into the transcript before deciding the next one.
-    let nativeCalls: { name: string; args: Record<string, unknown> }[] = [];
+  async run(session: RunSession): Promise<RunOutcome> {
+    const { spec, host } = session;
 
-    switch (input.observation.kind) {
-      case 'model_result': {
-        const observed = input.observation.content;
-        if (isNativeResult(observed)) {
-          nativeCalls = observed.toolCalls;
-          messages.push({
-            role: 'assistant',
-            content: observed.text || `(requested ${observed.toolCalls.map((c) => c.name).join(', ')})`,
-          });
-        } else {
-          messages.push({ role: 'assistant', content: String(observed ?? '') });
-        }
-        break;
-      }
-      case 'tool_result':
-      case 'delegation_result':
-        messages.push({ role: 'tool', content: JSON.stringify(input.observation.content ?? null) });
-        break;
-      case 'tool_error':
-      case 'delegation_error':
-        // Fed back rather than thrown: a failed tool is information the agent can act on,
-        // and §13.5 contains failure by default.
-        messages.push({ role: 'tool', content: `error: ${String(input.observation.content ?? '')}` });
-        break;
-      default:
-        break;
-    }
+    // See `Resumption` on `settle` below. One slot, consumed by the first replayed call
+    // that matches it, so the platform's already-settled work is not done a second time.
+    const pending = session.resume ? new ResumeSlot(session.resume) : null;
 
-    // A native tool call is unambiguous -- the provider says which tool and with what
-    // arguments. Text parsing stays only for models or endpoints without tool calling.
-    const native = nativeCalls.find((c) => input.spec.tools.some((t) => t.ref === c.name));
-    const action: NextAction =
-      native && state.toolCalls < MAX_TOOL_CALLS
-        ? { type: 'tool_call', toolRef: native.name, args: native.args }
-        : this.decide(input, state, messages[messages.length - 1]);
-    return {
-      action,
-      state: { messages, toolCalls: state.toolCalls + (action.type === 'tool_call' ? 1 : 0) },
+    const agent = createDeepAgent({
+      model: new HostChatModel(host),
+      tools: this.toolsFor(session, pending),
+      systemPrompt: systemPromptFor(session),
+      // §4.2 durability, on our database. This is the whole reason the migration was
+      // possible: LangGraph does not care whose Postgres it is.
+      checkpointer: this.checkpointer as BaseCheckpointSaver,
+      name: `run-${session.runId}`,
+    });
+
+    // The graph's thread is the RUN, not the conversation thread. A conversation may span
+    // many runs, and resuming graph state across them would replay another run's tool
+    // calls into this one's ledger.
+    const config = {
+      configurable: { thread_id: session.runId },
+      signal: session.signal,
+      // A second ceiling on top of the host's own counter. This one stops the graph
+      // cleanly; the host's stops it even if the framework ignores this. Doubled because
+      // a super-step is a model call plus its tool calls, so the graph needs more
+      // recursions than the platform counts steps.
+      recursionLimit: Math.max(4, spec.maxSteps * 2),
     };
+
+    try {
+      // RESUME, NOT REPLAY. `Command` re-enters the graph at the interrupt that suspended
+      // it, so the approved tool call finishes and nothing before it runs twice.
+      const input = session.resume
+        ? new Command({ resume: session.resume.value })
+        : { messages: [new HumanMessage(renderInput(session))] };
+
+      const result = (await agent.invoke(input, config)) as {
+        messages?: BaseMessage[];
+        structuredResponse?: unknown;
+        __interrupt__?: unknown;
+      };
+
+      if (result.__interrupt__) {
+        // The platform already recorded the wait and moved the run to `waiting`; the
+        // graph state sits in `langgraph_checkpoints` until it is resumed.
+        return { type: 'suspended' };
+      }
+
+      const messages = result.messages ?? [];
+      const last = messages[messages.length - 1];
+      return {
+        type: 'complete',
+        output: {
+          adapter: this.id,
+          text: textOf(last),
+          ...(result.structuredResponse !== undefined
+            ? { structured: result.structuredResponse }
+            : {}),
+          messageCount: messages.length,
+        },
+      };
+    } catch (e) {
+      // An aborted graph is the platform stopping the run, not the framework failing.
+      // `drive()` already knows why and will fail the run with the real reason; saying
+      // "aborted" here would overwrite "exceeded maxCost" with something useless.
+      if (session.signal.aborted) return { type: 'suspended' };
+      this.log.warn(`run ${session.runId} failed inside the graph: ${(e as Error).message}`);
+      return { type: 'fail', message: (e as Error).message };
+    }
   }
 
-  private decide(input: AdvanceInput, state: DeepAgentsState, last: Message | undefined): NextAction {
-    if (!last || last.role === 'user' || last.role === 'system') {
-      return {
-        type: 'model_call',
-        prompt: renderTranscript(input, state.messages),
-        systemPrompt: input.spec.systemPrompt,
-      };
-    }
+  /**
+   * Bound tools, plus one handle per sub-agent and peer.
+   *
+   * Delegation and peer calls are exposed AS TOOLS to the model but are NOT tools to the
+   * platform: each starts a separate run with its own lifecycle and suspends this one.
+   * That distinction is §13.3's and it survives here because the host has three different
+   * methods, not one -- the model picking a name is presentation; what the platform does
+   * with it is semantics.
+   */
+  private toolsFor(session: RunSession, pending: ResumeSlot | null) {
+    const { spec, host } = session;
 
-    if (last.role === 'assistant') {
-      const requested = parseToolCall(last.content, input.spec.tools.map((t) => t.ref));
-      if (requested) {
-        // A budget the framework cannot talk its way past. Without it a model that keeps
-        // proposing calls runs to maxSteps, spending a model call each time.
-        if (state.toolCalls >= MAX_TOOL_CALLS) {
-          this.log.warn(`run ${input.runId} hit the tool-call ceiling`);
-          return { type: 'complete', output: { adapter: this.id, text: last.content, truncated: 'tool_call_limit' } };
-        }
-        return { type: 'tool_call', toolRef: requested.toolRef, args: requested.args };
-      }
-      return { type: 'complete', output: { adapter: this.id, text: last.content } };
-    }
+    const bound = spec.tools.map((t) =>
+      tool(
+        async (args: Record<string, unknown>) =>
+          settle(pending, t.ref, () => host.callTool(t.ref, args), `tool ${t.ref}`),
+        {
+          name: t.ref,
+          description: t.description ?? `Invoke ${t.ref}`,
+          schema: (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
+        },
+      ),
+    );
 
-    // A tool or delegation just returned: back to the model to interpret it.
-    return {
-      type: 'model_call',
-      prompt: renderTranscript(input, state.messages),
-      systemPrompt: input.spec.systemPrompt,
-    };
+    const delegates = spec.subAgents.map((a) =>
+      tool(
+        async (args: { input?: unknown }) =>
+          settle(
+            pending,
+            a.alias,
+            () => host.delegate(a.alias, args.input ?? null),
+            `delegation to ${a.alias}`,
+          ),
+        {
+          name: handleName('delegate_to', a.alias),
+          description:
+            a.description ??
+            `Delegate a sub-task to the "${a.alias}" agent and wait for its result.`,
+          schema: {
+            type: 'object',
+            properties: { input: { description: `What "${a.alias}" should do.` } },
+            required: ['input'],
+          },
+        },
+      ),
+    );
+
+    const peers = spec.peers.map((p) =>
+      tool(
+        async (args: { input?: unknown }) =>
+          settle(
+            pending,
+            p.alias,
+            () => host.peerCall(p.alias, args.input ?? null),
+            `peer call to ${p.alias}`,
+          ),
+        {
+          name: handleName('call_peer', p.alias),
+          description:
+            p.description ?? `Ask the external agent "${p.alias}" and wait for its answer.`,
+          schema: {
+            type: 'object',
+            properties: { input: { description: `What to ask "${p.alias}".` } },
+            required: ['input'],
+          },
+        },
+      ),
+    );
+
+    return [...bound, ...delegates, ...peers];
   }
 }
-
-const seed = (input: AdvanceInput): Message[] => {
-  const messages: Message[] = [];
-
-  // Skills first, and as INSTRUCTIONS rather than context. A skill is a procedure the
-  // author wants followed; recalled memory and retrieved knowledge are material to reason
-  // over. Flattening the two into one block loses that difference, and the model then
-  // treats a procedure as one more retrieved fact it may weigh against others.
-  if (input.spec.skills.length > 0) {
-    messages.push({
-      role: 'system',
-      content: input.spec.skills
-        .map(
-          (sk) =>
-            `Skill "${sk.name}" v${sk.version}` +
-            `${sk.whenToUse ? ` (use when: ${sk.whenToUse})` : ''}:\n${sk.instructions}`,
-        )
-        .join('\n\n'),
-    });
-  }
-
-  // Retrieved knowledge, kept in its own block and labelled as reference material. The
-  // separation is what lets a wrong answer be traced to a stale document rather than to a
-  // bad memory -- two different fixes, in two different places.
-  if (input.spec.knowledge.length > 0) {
-    messages.push({
-      role: 'system',
-      content:
-        `Reference material retrieved for this request (may be incomplete):\n` +
-        input.spec.knowledge.map((k) => `- ${k.content}`).join('\n'),
-    });
-  }
-
-  // Recalled memory enters as context tagged with provenance -- §6.4 keeps hearsay
-  // distinguishable from first-party knowledge at the point of use.
-  if (input.spec.recalled.length > 0) {
-    messages.push({
-      role: 'system',
-      content: `Recalled context:\n${input.spec.recalled
-        .map((r) => `- (${r.provenance}${r.trusted ? '' : ', unverified'}) ${r.content ?? ''}`)
-        .join('\n')}`,
-    });
-  }
-  messages.push({
-    role: 'user',
-    content: typeof input.input === 'string' ? input.input : JSON.stringify(input.input ?? ''),
-  });
-  return messages;
-};
-
-const renderTranscript = (input: AdvanceInput, messages: Message[]): string => {
-  const transcript = messages.map((m) => `${m.role}: ${m.content}`).join('\n');
-  if (input.spec.tools.length === 0) return transcript;
-
-  // The example uses a REAL tool ref, not a placeholder. Instructing a model with
-  // `TOOL <ref> <json-args>` gets `TOOL <ref> {...}` back verbatim -- the placeholder is
-  // copied rather than substituted, and the strict parser then correctly refuses it, so
-  // the tool is simply never called and nothing looks broken.
-  const first = input.spec.tools[0]!.ref;
-  const catalogue = input.spec.tools
-    .map((t) => `  - ${t.ref}${t.description ? `: ${t.description}` : ''}`)
-    .join('\n');
-
-  return (
-    `${transcript}\n\nTools you may call:\n${catalogue}\n` +
-    `To call one, reply with a single line and nothing else, for example:\n` +
-    `TOOL ${first} {"key": "value"}\n` +
-    `Otherwise answer normally.`
-  );
-};
 
 /**
- * Extracts a tool call from an assistant turn.
+ * Holds the value a resumed run is carrying, to be claimed once by the call it answers.
  *
- * Deliberately strict: an unparseable or unbound reference is treated as prose, not as a
- * call to something else. Guessing which tool was meant is how an agent invokes a side
- * effect nobody asked for.
+ * Single-use and ref-matched. A run suspended on `demo.pay` must not have its receipt
+ * handed to `demo.lookup` merely because that one happened to replay first.
  */
-function parseToolCall(
-  content: string,
-  allowed: string[],
-): { toolRef: string; args: Record<string, unknown> } | null {
-  // Line-anchored, and the JSON must be the REST OF THAT LINE. A `[\s\S]*` body is
-  // greedy across newlines, so it swallows the model's following prose whenever that
-  // prose happens to end in `}` -- then JSON.parse fails and a real tool call is silently
-  // read as prose. That failure looks exactly like the agent choosing not to act.
-  for (const line of content.split('\n')) {
-    const match = /^\s*TOOL\s+([\w.\-]+)\s*(\{.*\})?\s*$/.exec(line);
-    if (!match) continue;
-    const toolRef = match[1]!;
-    if (!allowed.includes(toolRef)) continue;
-    if (!match[2]) return { toolRef, args: {} };
-    try {
-      const args = JSON.parse(match[2]) as unknown;
-      if (typeof args === 'object' && args !== null) {
-        return { toolRef, args: args as Record<string, unknown> };
-      }
-    } catch {
-      // Malformed args: refuse rather than guess. Inventing arguments invokes a side
-      // effect nobody asked for.
-      return null;
-    }
+class ResumeSlot {
+  private taken = false;
+  constructor(private readonly resume: { value: unknown; ref: string | null }) {}
+
+  /** True when this call is the one the platform already settled. */
+  claims(ref: string): boolean {
+    if (this.taken) return false;
+    return this.resume.ref === null || this.resume.ref === ref;
   }
-  return null;
+
+  take(): unknown {
+    this.taken = true;
+    return this.resume.value;
+  }
 }
 
-const isNativeResult = (
-  value: unknown,
-): value is { text: string; toolCalls: { name: string; args: Record<string, unknown> }[] } =>
-  typeof value === 'object' &&
-  value !== null &&
-  Array.isArray((value as { toolCalls?: unknown }).toolCalls);
+/**
+ * Turns a host outcome into something the graph can carry on with.
+ *
+ * ## Suspension
+ *
+ * `suspended` becomes `interrupt()`, which is a CONTROL SIGNAL rather than an error:
+ * LangGraph's tool node re-throws it instead of converting it to a message, the
+ * checkpointer persists the graph exactly where it stopped, and the run leaves the queue.
+ * That is how a 24-hour approval wait costs nothing while it waits.
+ *
+ * ## Resumption, and the trap in it
+ *
+ * LangGraph resumes a task by RE-EXECUTING it from the top, up to the `interrupt()` that
+ * suspended it -- so everything before that call runs a second time. Left alone, that
+ * means `host.callTool` fires again on resume, and the payment a human just approved is
+ * sent twice. It is a quiet failure: both calls succeed, and the duplicate is caused by
+ * the approval gate that existed to prevent exactly this.
+ *
+ * So the resumed value short-circuits the host entirely. The platform already executed
+ * the approved call during `resumePendingAction` and handed back what it produced; this
+ * returns that, and never reaches `interrupt()` at all.
+ *
+ * KNOWN LIMIT: if the model requested several tools in one turn and one of them
+ * suspended, the others do re-execute on resume, because LangGraph replays the whole
+ * super-step. Idempotent tools are deduplicated by their idempotency key (§4.5); a
+ * non-idempotent one issued alongside an approval-gated one is not. Narrowing that needs
+ * per-call write-ahead records, which is Phase 7's business, not a comment's.
+ *
+ * ## Failure
+ *
+ * An `error` becomes ordinary tool output, not a throw: §13.5 contains failure by
+ * default, and a failed tool is information the agent can act on.
+ */
+async function settle(
+  pending: ResumeSlot | null,
+  ref: string,
+  invoke: () => Promise<Awaited<ReturnType<RunHost['callTool']>>>,
+  what: string,
+): Promise<string> {
+  if (pending?.claims(ref)) return render(pending.take());
+
+  const outcome = await invoke();
+  if (outcome.kind === 'ok') return render(outcome.output);
+  if (outcome.kind === 'error') return `error: ${outcome.message}`;
+
+  return render(interrupt({ reason: outcome.reason, ref: outcome.ref, what }));
+}
+
+const render = (value: unknown): string =>
+  typeof value === 'string' ? value : JSON.stringify(value ?? null);
+
+/**
+ * A tool name a provider will accept.
+ *
+ * Every vendor constrains these to `[A-Za-z0-9_-]`, and an alias is author-chosen text.
+ * Sanitising here rather than validating at registration keeps a legal alias from being
+ * rejected for a reason that has nothing to do with the platform.
+ */
+function handleName(prefix: string, alias: string): string {
+  return `${prefix}_${alias.replace(/[^A-Za-z0-9_-]/g, '_')}`.slice(0, 64);
+}
+
+/**
+ * The system prompt, assembled from what the platform resolved.
+ *
+ * Skills go in as INSTRUCTIONS and knowledge and memory as CONTEXT, kept in separate
+ * blocks. A skill is a procedure the author wants followed; recalled memory and retrieved
+ * knowledge are material to reason over. Flattening the three into one block makes the
+ * model treat a procedure as one more retrieved fact it may weigh against others -- and
+ * makes a wrong answer impossible to attribute to a stale document rather than a bad
+ * memory, which are two different fixes in two different places.
+ *
+ * Phase 4 moves skills and memory behind DeepAgents' own middleware, which reads them
+ * from a backend instead. This is the interim shape and is deliberately simple.
+ */
+function systemPromptFor(session: RunSession): string {
+  const { spec } = session;
+  const blocks: string[] = [];
+  if (spec.systemPrompt) blocks.push(spec.systemPrompt);
+
+  if (spec.skills.length) blocks.push(renderSkills(spec.skills));
+
+  if (spec.knowledge.length) {
+    blocks.push(
+      'Reference material retrieved for this request (may be incomplete):\n' +
+        spec.knowledge.map((k) => `- ${k.content}`).join('\n'),
+    );
+  }
+
+  if (spec.recalled.length) {
+    // §6.4 keeps hearsay distinguishable from first-party knowledge at the point of use.
+    blocks.push(
+      'Recalled context:\n' +
+        spec.recalled
+          .map((r) => `- (${r.provenance}${r.trusted ? '' : ', unverified'}) ${r.content ?? ''}`)
+          .join('\n'),
+    );
+  }
+
+  return blocks.join('\n\n');
+}
+
+function renderSkills(skills: SkillHandle[]): string {
+  return skills
+    .map(
+      (sk) =>
+        `Skill "${sk.name}" v${sk.version}` +
+        `${sk.whenToUse ? ` (use when: ${sk.whenToUse})` : ''}:\n${sk.instructions}`,
+    )
+    .join('\n\n');
+}
+
+function renderInput(session: RunSession): string {
+  return typeof session.input === 'string' ? session.input : JSON.stringify(session.input ?? '');
+}
+
+function textOf(message: BaseMessage | undefined): string {
+  if (!message) return '';
+  if (typeof message.content === 'string') return message.content;
+  if (!Array.isArray(message.content)) return '';
+  return message.content
+    .map((part) => (typeof part === 'object' && part && 'text' in part ? String(part.text) : ''))
+    .filter(Boolean)
+    .join('');
+}

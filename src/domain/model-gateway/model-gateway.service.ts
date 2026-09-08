@@ -90,6 +90,10 @@ export class ModelGateway {
             tenant: args.tenantRef,
             model: model.id,
             prompt: args.request.prompt,
+            // The transcript is part of the key, not decoration: two calls with the same
+            // trailing prompt but different tool results before it are different
+            // questions, and sharing an answer between them replays a stale result.
+            messages: args.request.messages ?? null,
             system: args.request.systemPrompt ?? null,
           })
         : null;

@@ -1,3 +1,4 @@
+import { Inject, Injectable } from '@nestjs/common';
 import { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint';
 import type {
   Checkpoint,
@@ -7,9 +8,11 @@ import type {
   PendingWrite,
 } from '@langchain/langgraph-checkpoint';
 import type { RunnableConfig } from '@langchain/core/runnables';
-import type { Database } from '../../platform/persistence/schema.types.js';
+import type { Database } from '../../../platform/persistence/schema.types.js';
 import type { Kysely } from 'kysely';
-import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { PlatformError } from '../../../domain/errors/platform.errors.js';
+import { maybeContext } from '../../../platform/context/platform-context.js';
+import { DB } from '../../../platform/persistence/tokens.js';
 
 /**
  * LangGraph's `BaseCheckpointSaver`, backed by Postgres.
@@ -20,11 +23,15 @@ import { PlatformError } from '../../domain/errors/platform.errors.js';
  *
  * ## Tenancy
  *
- * `BaseCheckpointSaver` only knows about thread ids, so `org_id` travels in the
- * RunnableConfig's `configurable` alongside `thread_id`. It is REQUIRED, and a missing one
- * throws rather than defaulting: a checkpoint holds a run's entire conversation state, so
- * a row written without a tenant would sit outside every RLS policy in 0020 and 0023 and
- * be readable by the next tenant to ask. Failing the write is the safe direction.
+ * `BaseCheckpointSaver` only knows about thread ids, so `org_id` comes from the ambient
+ * platform context -- pinned by the run loop for the whole drive -- or, outside a run,
+ * from the RunnableConfig's `configurable`. It is REQUIRED, and a missing one throws
+ * rather than defaulting: a checkpoint holds a run's entire conversation state, so a row
+ * written without a tenant would sit outside every RLS policy in 0020 and 0023 and be
+ * readable by the next tenant to ask. Failing the write is the safe direction.
+ *
+ * Taking the context in preference to the config is what stops a FRAMEWORK choosing its
+ * own tenant: the config is reachable from inside the graph, and the context is not.
  *
  * ## Serialization
  *
@@ -33,8 +40,9 @@ import { PlatformError } from '../../domain/errors/platform.errors.js';
  * cannot round-trip -- so the type tag it returns is stored beside the bytes and handed
  * back on load.
  */
+@Injectable()
 export class PostgresCheckpointSaver extends BaseCheckpointSaver {
-  constructor(private readonly db: Kysely<Database>) {
+  constructor(@Inject(DB) private readonly db: Kysely<Database>) {
     super();
   }
 
@@ -241,7 +249,12 @@ function scopeOf(
   if (!threadId) {
     throw new PlatformError('internal', 'checkpointer requires a thread_id in config');
   }
-  const orgId = config.configurable?.['org_id'] as string | undefined;
+  // Config first, ambient platform context second. The fallback is not a convenience:
+  // the run loop already pins the org for the whole drive, so reading it from there means
+  // a framework CANNOT choose which tenant its checkpoints land in -- it has no way to
+  // reach the context. Config remains supported for callers outside a run (tests, tools).
+  const orgId =
+    (config.configurable?.['org_id'] as string | undefined) ?? maybeContext()?.orgId;
   if (opts?.requireOrg && !orgId) {
     // Refused rather than defaulted -- see the class comment on tenancy.
     throw new PlatformError(

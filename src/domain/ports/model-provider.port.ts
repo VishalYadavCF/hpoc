@@ -13,9 +13,33 @@ export interface ToolCall {
   id?: string;
 }
 
+/** One turn of a transcript, in the shape every vendor's chat API agrees on. */
+export interface ModelMessage {
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+  /** Present on an assistant turn that asked for tools. */
+  toolCalls?: ToolCall[];
+  /** Present on a tool turn, matching the assistant turn's call id. */
+  toolCallId?: string;
+}
+
 export interface ModelRequest {
   providerModelId: string;
+  /**
+   * The single-turn form. Kept because most callers have exactly one question to ask and
+   * building a one-element array for them is noise.
+   */
   prompt: string;
+  /**
+   * The multi-turn form, which WINS over `prompt` when present.
+   *
+   * A reasoning loop's transcript is not a string: it is an alternation of assistant
+   * turns that requested tools and tool turns that answered them, tied together by call
+   * ids. Flattening that into prose loses the ids, and the model then has to re-infer
+   * which result belonged to which request -- which is exactly where a correct second
+   * tool call turns into a wrong one.
+   */
+  messages?: ModelMessage[];
   systemPrompt?: string | null;
   maxOutputTokens?: number | null;
   /**

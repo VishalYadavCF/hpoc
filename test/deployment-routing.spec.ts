@@ -46,7 +46,7 @@ beforeAll(async () => {
   const versions = new AgentVersionService(f.db);
   deployments = new DeploymentService(f.db, uow);
   agents = new AgentService(f.db, uow, admission, versions, deployments);
-  runs = new RunService(f.db, uow, admission, versions, new EventLog(f.db), new QueueService(f.db));
+  runs = new RunService(f.db, uow, admission, versions, new EventLog(), new QueueService(f.db));
 
   const agent = await f.db
     .insertInto('agents')

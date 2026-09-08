@@ -61,12 +61,20 @@ export class EchoProvider extends LangChainProvider {
   readonly id = 'echo';
 
   protected build(request: ModelRequest): BaseChatModel {
-    const text = `echo(${request.providerModelId}): ${request.prompt}`;
+    // The LAST turn, not the whole transcript: the contract this fake pins is "the
+    // provider saw what was most recently asked", and echoing the history back would make
+    // every assertion in the suite grow as the transcript does.
+    const asked = request.messages?.length
+      ? (request.messages[request.messages.length - 1]?.content ?? '')
+      : request.prompt;
+    const text = `echo(${request.providerModelId}): ${asked}`;
     const model = new EchoChatModel(text);
 
     // Usage is attached here, not inside the fake, because the input side depends on the
     // request rather than on the answer.
-    const inputTokens = approximateTokens(`${request.systemPrompt ?? ''} ${request.prompt}`);
+    const inputTokens = approximateTokens(
+      `${request.systemPrompt ?? ''} ${request.messages?.map((m) => m.content).join(' ') ?? request.prompt}`,
+    );
     const outputTokens = approximateTokens(text);
     const generate = model._generate.bind(model);
     model._generate = async (messages, options, runManager) => {

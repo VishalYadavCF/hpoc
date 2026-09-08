@@ -3,7 +3,7 @@ import { createDeepAgent } from 'deepagents';
 import { tool } from '@langchain/core/tools';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { z } from 'zod';
-import { PostgresCheckpointSaver } from '../src/adapters/checkpoint/postgres.checkpoint-saver.js';
+import { PostgresCheckpointSaver } from '../src/adapters/framework/deep-agents/postgres.checkpoint-saver.js';
 import { PlatformError } from '../src/domain/errors/platform.errors.js';
 import { fixture, type Fixture } from './fixtures.js';
 
