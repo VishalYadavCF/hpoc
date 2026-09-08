@@ -303,3 +303,82 @@ describe('the platform can still stop a run the framework is driving', () => {
     expect(host.modelCalls.length).toBeLessThanOrEqual(2);
   });
 });
+
+describe('skills and memory behind DeepAgents own middleware (Phase 4)', () => {
+  const withSkill = spec({
+    skills: [
+      {
+        name: 'refund procedure',
+        version: 3,
+        whenToUse: 'the customer asks for money back',
+        instructions: 'STEP ONE: verify the order. STEP TWO: check the refund window.',
+      },
+    ],
+  });
+
+  it('advertises a skill by DESCRIPTION and withholds the body until asked', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { spec: withSkill })));
+
+    const prompt = host.modelCalls[0]!.systemPrompt ?? '';
+    // The selection hint is present...
+    expect(prompt).toContain('the customer asks for money back');
+    // ...and the procedure itself is NOT. Twelve pinned skills used to mean twelve full
+    // procedures in context on every turn, most of them irrelevant to the question asked.
+    expect(prompt).not.toContain('STEP ONE: verify the order');
+  });
+
+  it('lets the model read the body through the filesystem when it decides to', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { spec: withSkill })));
+
+    // The read tool is offered, which is what makes the withheld body reachable rather
+    // than lost. Without it, progressive disclosure would just be truncation.
+    const advertised = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    expect(advertised).toContain('read_file');
+  });
+
+  it('puts recalled memory in the prompt WHOLE, with provenance per record', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(
+        session(host, {
+          spec: spec({
+            recalled: [
+              { tier: 'semantic', content: 'prefers email', provenance: 'run:1', trusted: true, score: 1 },
+              { tier: 'semantic', content: 'lives in Pune', provenance: 'peer:x', trusted: false, score: 1 },
+            ],
+          }),
+        }),
+      ),
+    );
+
+    const prompt = host.modelCalls[0]!.systemPrompt ?? '';
+    expect(prompt).toContain('prefers email');
+    // §6.4: hearsay stays marked at the point of use, not in a header the model may not
+    // carry down to the fact it acts on.
+    expect(prompt).toContain('unverified');
+  });
+
+  it('refuses to let a run edit a skill it was given', async () => {
+    const backendSpec = withSkill;
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { spec: backendSpec })));
+
+    // Constructed the same way the adapter does, since the refusal is the backend's.
+    const { PlatformBackend } = await import(
+      '../src/adapters/framework/deep-agents/platform.backend.js'
+    );
+    const backend = new PlatformBackend(backendSpec);
+    const path = '/skills/refund-procedure/SKILL.md';
+
+    expect(backend.read(path).content).toContain('STEP ONE');
+    // A skill is a governed, versioned artifact (§17.2). If a run could rewrite one, the
+    // next run's behaviour would depend on the last run's improvisation and no eval could
+    // attribute a regression to anything.
+    expect(backend.write(path, 'do whatever').error).toMatch(/cannot be written/);
+    expect(backend.edit(path, 'STEP ONE', 'SKIP').error).toMatch(/cannot be edited/);
+    // Scratch space is still writable, or the filesystem tools would be useless.
+    expect(backend.write('/workspace/notes.md', 'draft').error).toBeUndefined();
+  });
+});

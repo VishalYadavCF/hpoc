@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { createDeepAgent } from 'deepagents';
+import { createDeepAgent, createMemoryMiddleware, createSkillsMiddleware } from 'deepagents';
 import { tool } from '@langchain/core/tools';
 import { Command, interrupt } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph';
@@ -10,10 +10,10 @@ import type {
   RunHost,
   RunOutcome,
   RunSession,
-  SkillHandle,
 } from '../../../domain/ports/framework-adapter.port.js';
 import { PostgresCheckpointSaver } from './postgres.checkpoint-saver.js';
 import { HostChatModel } from './host-chat-model.js';
+import { PlatformBackend } from './platform.backend.js';
 
 /**
  * The real `deepagents` binding.
@@ -66,10 +66,39 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
     // that matches it, so the platform's already-settled work is not done a second time.
     const pending = session.resume ? new ResumeSlot(session.resume) : null;
 
+    // Skills, recalled memory and retrieved knowledge, projected as files the framework's
+    // own middleware reads. See `PlatformBackend` for why a filesystem, and for what
+    // stays above it.
+    const backend = new PlatformBackend(spec);
+
     const agent = createDeepAgent({
       model: new HostChatModel(host),
       tools: this.toolsFor(session, pending),
-      systemPrompt: systemPromptFor(session),
+      systemPrompt: spec.systemPrompt ?? undefined,
+      backend,
+      middleware: [
+        // Progressive disclosure: names and descriptions go in the prompt, bodies are
+        // read on demand. This is the behavioural change Phase 4 is for -- the platform
+        // no longer concatenates every pinned skill's full text into every turn.
+        ...(backend.skillSources().length
+          ? [createSkillsMiddleware({ backend, sources: backend.skillSources() })]
+          : []),
+        // Memory and knowledge DO go in the prompt whole: unlike a skill, a recalled fact
+        // is not a procedure the model can decide it does not need -- it cannot know that
+        // without reading it, and a fact it never read is a fact it will contradict.
+        ...(backend.memorySources().length
+          ? [
+              createMemoryMiddleware({
+                backend,
+                sources: backend.memorySources(),
+                // Anthropic prompt caching on the memory block. Recalled context is
+                // identical across every turn of a run, so paying for it once instead of
+                // once per step is free money we were not taking.
+                addCacheControl: true,
+              }),
+            ]
+          : []),
+      ],
       // §4.2 durability, on our database. This is the whole reason the migration was
       // possible: LangGraph does not care whose Postgres it is.
       checkpointer: this.checkpointer as BaseCheckpointSaver,
@@ -286,56 +315,6 @@ const render = (value: unknown): string =>
  */
 function handleName(prefix: string, alias: string): string {
   return `${prefix}_${alias.replace(/[^A-Za-z0-9_-]/g, '_')}`.slice(0, 64);
-}
-
-/**
- * The system prompt, assembled from what the platform resolved.
- *
- * Skills go in as INSTRUCTIONS and knowledge and memory as CONTEXT, kept in separate
- * blocks. A skill is a procedure the author wants followed; recalled memory and retrieved
- * knowledge are material to reason over. Flattening the three into one block makes the
- * model treat a procedure as one more retrieved fact it may weigh against others -- and
- * makes a wrong answer impossible to attribute to a stale document rather than a bad
- * memory, which are two different fixes in two different places.
- *
- * Phase 4 moves skills and memory behind DeepAgents' own middleware, which reads them
- * from a backend instead. This is the interim shape and is deliberately simple.
- */
-function systemPromptFor(session: RunSession): string {
-  const { spec } = session;
-  const blocks: string[] = [];
-  if (spec.systemPrompt) blocks.push(spec.systemPrompt);
-
-  if (spec.skills.length) blocks.push(renderSkills(spec.skills));
-
-  if (spec.knowledge.length) {
-    blocks.push(
-      'Reference material retrieved for this request (may be incomplete):\n' +
-        spec.knowledge.map((k) => `- ${k.content}`).join('\n'),
-    );
-  }
-
-  if (spec.recalled.length) {
-    // §6.4 keeps hearsay distinguishable from first-party knowledge at the point of use.
-    blocks.push(
-      'Recalled context:\n' +
-        spec.recalled
-          .map((r) => `- (${r.provenance}${r.trusted ? '' : ', unverified'}) ${r.content ?? ''}`)
-          .join('\n'),
-    );
-  }
-
-  return blocks.join('\n\n');
-}
-
-function renderSkills(skills: SkillHandle[]): string {
-  return skills
-    .map(
-      (sk) =>
-        `Skill "${sk.name}" v${sk.version}` +
-        `${sk.whenToUse ? ` (use when: ${sk.whenToUse})` : ''}:\n${sk.instructions}`,
-    )
-    .join('\n\n');
 }
 
 function renderInput(session: RunSession): string {
