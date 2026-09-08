@@ -162,7 +162,11 @@ describe('multiple LLM providers', () => {
     expect(run['status']).toBe('completed');
 
     const call = captured['anthropic']!;
-    expect(call.path).toBe('/messages');
+    // `/v1` moved from `models.base_url` into the vendor SDK. The hand-written adapter
+    // treated base_url as "root including the version" and appended `/messages`; the SDK
+    // treats it as the API root and builds `/v1/messages` itself. base_url rows therefore
+    // carry no version segment any more -- see migration 0025.
+    expect(call.path).toBe('/v1/messages');
     // Different auth header, not Bearer.
     expect(call.headers['x-api-key']).toBe('test-key-abc123');
     expect(call.headers['anthropic-version']).toBe('2023-06-01');
@@ -177,12 +181,17 @@ describe('multiple LLM providers', () => {
     expect(run['status']).toBe('completed');
 
     const call = captured['google']!;
-    expect(call.path).toBe('/models/gemini-2.0-flash:generateContent');
+    // Same base_url semantics change as Anthropic above: the SDK owns `/v1beta`.
+    expect(call.path).toBe('/v1beta/models/gemini-2.0-flash:generateContent');
     // Key in a header, never on the URL, so it cannot land in an access log.
     expect(call.headers['x-goog-api-key']).toBe('test-key-abc123');
     expect(call.path).not.toContain('test-key');
     expect(call.body['contents']).toEqual([{ role: 'user', parts: [{ text: 'ping' }] }]);
-    expect(call.body['systemInstruction']).toEqual({ parts: [{ text: 'be brief' }] });
+    // Asserted on `parts` rather than the whole object: the SDK also sets an explicit
+    // `role: "system"`, which the hand-written adapter omitted. What matters to this test
+    // is that the system prompt travels as `systemInstruction` and not as a user turn --
+    // pinning the exact envelope would make a harmless vendor-shape change look like a bug.
+    expect(call.body['systemInstruction']).toMatchObject({ parts: [{ text: 'be brief' }] });
   });
 
   it('concatenates Anthropic text blocks rather than taking the first', async () => {

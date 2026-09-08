@@ -3,9 +3,11 @@ import { EchoAdapter } from './framework/echo/echo.adapter.js';
 import { PipelineAdapter } from './framework/pipeline/pipeline.adapter.js';
 import { DeepAgentsAdapter } from './framework/deep-agents/deep-agents.adapter.js';
 import { EchoProvider } from './providers/echo.provider.js';
-import { OpenAiCompatibleProvider } from './providers/openai-compatible.provider.js';
-import { AnthropicProvider } from './providers/anthropic.provider.js';
-import { GoogleProvider } from './providers/google.provider.js';
+import {
+  AnthropicProvider,
+  GoogleProvider,
+  OpenAiCompatibleProvider,
+} from './providers/langchain.provider.js';
 import { EnvSecretStore } from './secrets/env.secret-store.js';
 import { PostgresMemoryStore } from './memory/postgres.memory-store.js';
 import { PgVectorIndex } from './memory/pgvector.index.js';

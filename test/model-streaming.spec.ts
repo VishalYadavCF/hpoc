@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { ModelGateway } from '../src/domain/model-gateway/model-gateway.service.js';
 import { EchoProvider } from '../src/adapters/providers/echo.provider.js';
-import { OpenAiCompatibleProvider } from '../src/adapters/providers/openai-compatible.provider.js';
+import { OpenAiCompatibleProvider } from '../src/adapters/providers/langchain.provider.js';
 import { CredentialBroker } from '../src/domain/identity/credential-broker.service.js';
 import { InMemoryResponseCache } from '../src/adapters/cache/in-memory.response-cache.js';
 import { UnitOfWork } from '../src/platform/persistence/unit-of-work.js';
@@ -333,14 +333,21 @@ describe('OpenAI-compatible SSE decoding', () => {
     expect(text).toBe('x');
   });
 
-  it('skips an unparseable frame instead of failing the generation', async () => {
+  it('fails the generation on an unparseable frame rather than silently truncating', async () => {
+    // BEHAVIOUR CHANGE, deliberate. The hand-written decoder skipped a malformed frame
+    // and carried on, so a stream that lost content still arrived looking complete --
+    // the caller could not tell a whole answer from a damaged one. The vendor SDK throws,
+    // which is the honest reading: we do not know what was in that frame, and a truncated
+    // answer presented as a finished one is the failure mode §4.5 exists to refuse.
     sseScript = {
       status: 200,
       frames: ['data: {not json}\n\n', 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', 'data: [DONE]\n\n'],
     };
-    let text = '';
-    for await (const c of provider.stream(req, creds())) text += c.textDelta ?? '';
-    expect(text).toBe('ok');
+    await expect(
+      (async () => {
+        for await (const _ of provider.stream(req, creds())) { /* consume */ }
+      })(),
+    ).rejects.toThrow();
   });
 
   it('propagates a non-200 honestly rather than yielding an empty completion', async () => {

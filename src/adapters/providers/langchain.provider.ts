@@ -1,0 +1,231 @@
+import { Injectable } from '@nestjs/common';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
+import type { AIMessageChunk, BaseMessage } from '@langchain/core/messages';
+import { ChatOpenAI } from '@langchain/openai';
+import { ChatAnthropic } from '@langchain/anthropic';
+import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { PlatformError } from '../../domain/errors/platform.errors.js';
+import type {
+  ModelProvider,
+  ModelRequest,
+  ModelResponse,
+  ModelStreamChunk,
+} from '../../domain/ports/model-provider.port.js';
+
+/**
+ * Vendor access through LangChain's `BaseChatModel`, rather than hand-written HTTP.
+ *
+ * ## Why the wire protocol left this repo
+ *
+ * These adapters used to speak each vendor's REST API directly -- request shaping,
+ * response parsing, and an SSE decoder buffering `data:` frames across TCP reads. All of
+ * it was verified only against local servers we wrote ourselves, which cannot tell us our
+ * reading of a protocol is wrong: a fake that shares the misconception agrees with it.
+ * `ap-executor` had already been running the same vendors through `BaseChatModel` in
+ * production, so the choice was between two implementations of one protocol where only
+ * one had ever met a real vendor.
+ *
+ * ## What deliberately did NOT move
+ *
+ * Everything §9 and §16.1 care about stays in `ModelGateway`: the residency gate, the
+ * tenant-keyed response cache, per-call credential brokering, fallback, and cost
+ * attribution. A provider here is only "turn this request into that vendor's call" --
+ * it never sees an org, a tenant, or a budget. Keeping the `ModelProvider` port intact is
+ * what let the vendor implementation be replaced without the gateway noticing.
+ *
+ * Credentials arrive per call and are used to construct a client per call. They are never
+ * held on the injected singleton and never written to `process.env` -- under concurrency
+ * that is precisely how one tenant's key reaches another tenant's request (§16.3), and
+ * ap-executor carries a comment recording that it had exactly that bug.
+ *
+ * ## Retry belongs to the gateway, not the client
+ *
+ * Every vendor SDK retries by default. Left on, a 500 is retried by the SDK, and THEN
+ * `ModelGateway` falls back to a second model -- so one failure becomes several calls, the
+ * budget is charged for all of them, and a test asserting "a 500 surfaces" hangs for the
+ * length of the backoff instead. Retry policy depends on budgets, backpressure and the
+ * effect contract, none of which a vendor client can see, so `maxRetries: 0` puts the
+ * decision where those live.
+ */
+export abstract class LangChainProvider implements ModelProvider {
+  abstract readonly id: string;
+
+  /** Construct the vendor client. Per call, never cached -- see the class comment. */
+  protected abstract build(
+    request: ModelRequest,
+    credentials: Record<string, string>,
+  ): BaseChatModel;
+
+  protected apiKey(credentials: Record<string, string>): string {
+    const apiKey = credentials['apiKey'];
+    if (!apiKey) {
+      throw new PlatformError('upstream_failure', 'No apiKey supplied by the credential broker');
+    }
+    return apiKey;
+  }
+
+  async complete(
+    request: ModelRequest,
+    credentials: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<ModelResponse> {
+    const model = this.bind(this.build(request, credentials), request);
+    const result = await model.invoke(messagesFor(request), { signal });
+    return toModelResponse(result as AIMessage);
+  }
+
+  async *stream(
+    request: ModelRequest,
+    credentials: Record<string, string>,
+    signal?: AbortSignal,
+  ): AsyncIterable<ModelStreamChunk> {
+    const model = this.bind(this.build(request, credentials), request);
+
+    for await (const chunk of await model.stream(messagesFor(request), { signal })) {
+      const mapped = toStreamChunk(chunk);
+      // A chunk carrying neither text nor a tool-call fragment is protocol bookkeeping
+      // (role announcements, finish reasons). Forwarding it would make a consumer
+      // counting chunks believe output arrived when none did.
+      if (mapped) yield mapped;
+    }
+  }
+
+  /**
+   * Native tool calling, per the port's own reasoning about why text-parsed calls fail.
+   *
+   * `ToolSchema.parameters` is JSON Schema, which is what every vendor's function-calling
+   * API wants; the OpenAI function envelope is the shape LangChain normalises FROM for
+   * all three vendors, so no per-vendor branch is needed here.
+   */
+  private bind(model: BaseChatModel, request: ModelRequest): BaseChatModel {
+    if (!request.tools?.length) return model;
+    if (typeof model.bindTools !== 'function') {
+      throw new PlatformError(
+        'upstream_failure',
+        `Provider ${this.id} does not support tool calling`,
+      );
+    }
+    return model.bindTools(
+      request.tools.map((t) => ({
+        type: 'function' as const,
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+      })),
+    ) as unknown as BaseChatModel;
+  }
+}
+
+/** OpenAI and anything speaking its chat-completions API (LiteLLM, OpenRouter, vLLM). */
+@Injectable()
+export class OpenAiCompatibleProvider extends LangChainProvider {
+  readonly id = 'openai-compatible';
+
+  protected build(request: ModelRequest, credentials: Record<string, string>): BaseChatModel {
+    return new ChatOpenAI({
+      apiKey: this.apiKey(credentials),
+      model: request.providerModelId,
+      maxRetries: 0,
+      ...(request.maxOutputTokens ? { maxTokens: request.maxOutputTokens } : {}),
+      configuration: { baseURL: credentials['baseUrl'] ?? 'https://api.openai.com/v1' },
+    });
+  }
+}
+
+@Injectable()
+export class AnthropicProvider extends LangChainProvider {
+  readonly id = 'anthropic';
+
+  protected build(request: ModelRequest, credentials: Record<string, string>): BaseChatModel {
+    return new ChatAnthropic({
+      apiKey: this.apiKey(credentials),
+      model: request.providerModelId,
+      // Anthropic requires a token ceiling; the previous adapter defaulted to 1024 and
+      // callers depend on that rather than on a vendor default that may change.
+      maxTokens: request.maxOutputTokens ?? 1024,
+      maxRetries: 0,
+      anthropicApiUrl: credentials['baseUrl'] ?? 'https://api.anthropic.com',
+    });
+  }
+}
+
+@Injectable()
+export class GoogleProvider extends LangChainProvider {
+  readonly id = 'google';
+
+  protected build(request: ModelRequest, credentials: Record<string, string>): BaseChatModel {
+    return new ChatGoogleGenerativeAI({
+      apiKey: this.apiKey(credentials),
+      model: request.providerModelId,
+      maxRetries: 0,
+      ...(request.maxOutputTokens ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      ...(credentials['baseUrl'] ? { baseUrl: credentials['baseUrl'] } : {}),
+    });
+  }
+}
+
+function messagesFor(request: ModelRequest): BaseMessage[] {
+  const messages: BaseMessage[] = [];
+  if (request.systemPrompt) messages.push(new SystemMessage(request.systemPrompt));
+  messages.push(new HumanMessage(request.prompt));
+  return messages;
+}
+
+/**
+ * `usage_metadata` is LangChain's normalised token count across vendors, which is the
+ * whole reason it is read here rather than from each vendor's own field name. Zero when a
+ * vendor reports nothing: §9's ledger would rather record a known-zero than a guess.
+ */
+function toModelResponse(message: AIMessage): ModelResponse {
+  const usage = message.usage_metadata;
+  const toolCalls = (message.tool_calls ?? []).map((c) => ({
+    name: c.name,
+    args: (c.args ?? {}) as Record<string, unknown>,
+    ...(c.id ? { id: c.id } : {}),
+  }));
+
+  return {
+    text: textOf(message.content),
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+    ...(toolCalls.length ? { toolCalls } : {}),
+  };
+}
+
+function toStreamChunk(chunk: AIMessageChunk): ModelStreamChunk | null {
+  // Tool-call fragments first: a chunk can carry both, and the port models them as
+  // separate fields rather than one union, so a consumer accumulating arguments does not
+  // have to re-inspect a text field to find out whether it should.
+  const fragment = chunk.tool_call_chunks?.[0];
+  if (fragment) {
+    return {
+      toolCallDelta: {
+        index: fragment.index ?? 0,
+        ...(fragment.id ? { id: fragment.id } : {}),
+        ...(fragment.name ? { name: fragment.name } : {}),
+        ...(fragment.args ? { argsDelta: fragment.args } : {}),
+      },
+    };
+  }
+
+  const text = textOf(chunk.content);
+  return text ? { textDelta: text } : null;
+}
+
+/**
+ * Content is a string for text-only replies and an array of typed parts once a vendor
+ * returns anything richer. Only the text parts are joined: a caller asking for `text`
+ * must not silently receive a JSON dump of an image block.
+ */
+function textOf(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) =>
+      typeof part === 'string'
+        ? part
+        : typeof (part as { text?: unknown })?.text === 'string'
+          ? ((part as { text: string }).text)
+          : '',
+    )
+    .join('');
+}
