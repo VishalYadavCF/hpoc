@@ -1,0 +1,300 @@
+<!doctype html>
+<[31mhtml[0m [33mlang[0m=[32m"[0m[32men[0m[32m"[0m>
+<[31mhead[0m>
+<[31mmeta[0m [33mcharset[0m=[32m"[0m[32mutf-8[0m[32m"[0m>
+<[31mmeta[0m [33mname[0m=[32m"[0m[32mviewport[0m[32m"[0m [33mcontent[0m=[32m"[0m[32mwidth=device-width,initial-scale=1[0m[32m"[0m>
+<[31mtitle[0m>Agent Console</[31mtitle[0m>
+<[31mstyle[0m>
+  [34m:[0m[35mroot[0m[35m [0m{
+    --bg:[36m#[0m[36m0f1216[0m; --panel:[36m#[0m[36m161b22[0m; --edge:[36m#[0m[36m232a33[0m; --ink:[36m#[0m[36me6edf3[0m; --dim:[36m#[0m[36m8b98a5[0m;
+    --accent:[36m#[0m[36m7cc4ff[0m; --ok:[36m#[0m[36m3fb950[0m; --warn:[36m#[0m[36md29922[0m; --bad:[36m#[0m[36mf85149[0m; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  [35m@[0m[35mmedia[0m (prefers-color-scheme: light) {
+    [34m:[0m[35mroot[0m[35m [0m{ --bg:[36m#[0m[36mf6f8fa[0m; --panel:[36m#[0m[36mfff[0m; --edge:[36m#[0m[36md8dee4[0m; --ink:[36m#[0m[36m1f2328[0m; --dim:[36m#[0m[36m636c76[0m; --accent:[36m#[0m[36m0969da[0m; }
+  }
+  [31m*[0m{box-sizing:border-box} [31mbody[0m{margin:[33m0[0m;background:[36mvar[0m(--bg);color:[36mvar[0m(--ink);
+    font:[33m14[0m[33mpx[0m/[33m1[0m[33m.[0m[33m5[0m system-ui,[32m-apple-system[0m,[32mSegoe UI[0m,sans-serif}
+  [31mheader[0m{display:flex;gap:[33m16[0m[33mpx[0m;align-items:baseline;padding:[33m14[0m[33mpx[0m [33m20[0m[33mpx[0m;border-bottom:[33m1[0m[33mpx[0m solid [36mvar[0m(--edge)}
+  [31mheader[0m[35m [0m[31mh1[0m{font-size:[33m15[0m[33mpx[0m;margin:[33m0[0m;font-weight:[33m600[0m;letter-spacing:[33m.[0m[33m2[0m[33mpx[0m}
+  [31mheader[0m[35m [0m[34m.[0m[33msub[0m{color:[36mvar[0m(--dim);font-size:[33m12[0m[33mpx[0m}
+  [31mnav[0m{margin-left:auto;display:flex;gap:[33m4[0m[33mpx[0m}
+  [31mnav[0m[35m [0m[31mbutton[0m{background:none;border:[33m1[0m[33mpx[0m solid transparent;color:[36mvar[0m(--dim);padding:[33m5[0m[33mpx[0m [33m11[0m[33mpx[0m;
+    border-radius:[33m6[0m[33mpx[0m;cursor:pointer;font-size:[33m13[0m[33mpx[0m}
+  [31mnav[0m[35m [0m[31mbutton[0m[34m[[0m[33maria-selected[0m[35m=[0m[32mt[0m[32mr[0m[32mu[0m[32me[0m[34m][0m{background:[36mvar[0m(--panel);border-color:[36mvar[0m(--edge);color:[36mvar[0m(--ink)}
+  [31mmain[0m{padding:[33m18[0m[33mpx[0m [33m20[0m[33mpx[0m;max-width:[33m1180[0m[33mpx[0m}
+  [34m.[0m[33mrow[0m{display:flex;gap:[33m14[0m[33mpx[0m;flex-wrap:wrap;margin-bottom:[33m14[0m[33mpx[0m}
+  [34m.[0m[33mfield[0m{display:flex;flex-direction:column;gap:[33m4[0m[33mpx[0m}
+  [34m.[0m[33mfield[0m[35m [0m[31mlabel[0m{font-size:[33m11[0m[33mpx[0m;color:[36mvar[0m(--dim);text-transform:uppercase;letter-spacing:[33m.[0m[33m06[0m[33mem[0m}
+  [31minput[0m[35m,[0m[31mselect[0m{background:[36mvar[0m(--panel);border:[33m1[0m[33mpx[0m solid [36mvar[0m(--edge);color:[36mvar[0m(--ink);
+    border-radius:[33m6[0m[33mpx[0m;padding:[33m6[0m[33mpx[0m [33m9[0m[33mpx[0m;font-size:[33m13[0m[33mpx[0m;font-family:inherit}
+  [31mtable[0m{width:[33m100[0m[33m%[0m;border-collapse:collapse;font-size:[33m13[0m[33mpx[0m}
+  [31mth[0m{text-align:left;color:[36mvar[0m(--dim);font-weight:[33m500[0m;font-size:[33m11[0m[33mpx[0m;text-transform:uppercase;
+    letter-spacing:[33m.[0m[33m06[0m[33mem[0m;padding:[33m7[0m[33mpx[0m [33m10[0m[33mpx[0m;border-bottom:[33m1[0m[33mpx[0m solid [36mvar[0m(--edge)}
+  [31mtd[0m{padding:[33m7[0m[33mpx[0m [33m10[0m[33mpx[0m;border-bottom:[33m1[0m[33mpx[0m solid [36mvar[0m(--edge);vertical-align:top}
+  [31mtbody[0m[35m [0m[31mtr[0m[34m:[0m[35mhover[0m{background:[36mvar[0m(--panel);cursor:pointer}
+  [34m.[0m[33mpill[0m{display:inline-block;padding:[33m1[0m[33mpx[0m [33m8[0m[33mpx[0m;border-radius:[33m99[0m[33mpx[0m;font-size:[33m11[0m[33mpx[0m;font-weight:[33m500[0m}
+  [34m.[0m[33mcompleted[0m{background:color-mix(in srgb,[36mvar[0m(--ok) [33m18[0m[33m%[0m,transparent);color:[36mvar[0m(--ok)}
+  [34m.[0m[33mfailed[0m[35m,[0m[34m.[0m[33mdead_letter[0m{background:color-mix(in srgb,[36mvar[0m(--bad) [33m18[0m[33m%[0m,transparent);color:[36mvar[0m(--bad)}
+  [34m.[0m[33mwaiting[0m{background:color-mix(in srgb,[36mvar[0m(--warn) [33m18[0m[33m%[0m,transparent);color:[36mvar[0m(--warn)}
+  [34m.[0m[33mrunning[0m[35m,[0m[34m.[0m[33mqueued[0m{background:color-mix(in srgb,[36mvar[0m(--accent) [33m18[0m[33m%[0m,transparent);color:[36mvar[0m(--accent)}
+  [34m.[0m[33mmono[0m{font-family:[36mvar[0m(--mono);font-size:[33m12[0m[33mpx[0m}
+  [34m.[0m[33mdim[0m{color:[36mvar[0m(--dim)}
+  [34m.[0m[33mcard[0m{background:[36mvar[0m(--panel);border:[33m1[0m[33mpx[0m solid [36mvar[0m(--edge);border-radius:[33m9[0m[33mpx[0m;padding:[33m14[0m[33mpx[0m;margin-bottom:[33m12[0m[33mpx[0m}
+  [34m.[0m[33mcard[0m[35m [0m[31mh2[0m{margin:[33m0[0m [33m0[0m [33m10[0m[33mpx[0m;font-size:[33m12[0m[33mpx[0m;text-transform:uppercase;letter-spacing:[33m.[0m[33m06[0m[33mem[0m;color:[36mvar[0m(--dim);font-weight:[33m600[0m}
+  [34m.[0m[33mbar[0m{display:flex;height:[33m22[0m[33mpx[0m;border-radius:[33m5[0m[33mpx[0m;overflow:hidden;background:[36mvar[0m(--edge);margin:[33m8[0m[33mpx[0m [33m0[0m}
+  [34m.[0m[33mbar[0m[35m>[0m[31mspan[0m{display:flex;align-items:center;justify-content:center;font-size:[33m10[0m[33mpx[0m;color:[36m#[0m[36m0f1216[0m;font-weight:[33m600[0m;min-width:[33m0[0m}
+  [34m.[0m[33mlegend[0m{display:flex;gap:[33m14[0m[33mpx[0m;flex-wrap:wrap;font-size:[33m12[0m[33mpx[0m;color:[36mvar[0m(--dim)}
+  [34m.[0m[33mlegend[0m[35m [0m[31mi[0m{display:inline-block;width:[33m9[0m[33mpx[0m;height:[33m9[0m[33mpx[0m;border-radius:[33m2[0m[33mpx[0m;margin-right:[33m5[0m[33mpx[0m}
+  [34m.[0m[33mgrid[0m{display:grid;grid-template-columns:[36mrepeat[0m(auto-fit,[36mminmax[0m([33m150[0m[33mpx[0m,[33m1[0m[33mfr[0m));gap:[33m10[0m[33mpx[0m}
+  [34m.[0m[33mstat[0m{background:[36mvar[0m(--panel);border:[33m1[0m[33mpx[0m solid [36mvar[0m(--edge);border-radius:[33m9[0m[33mpx[0m;padding:[33m11[0m[33mpx[0m [33m13[0m[33mpx[0m}
+  [34m.[0m[33mstat[0m[35m [0m[31mb[0m{display:block;font-size:[33m21[0m[33mpx[0m;font-weight:[33m600[0m;font-variant-numeric:tabular-nums}
+  [34m.[0m[33mstat[0m[35m [0m[31mspan[0m{font-size:[33m11[0m[33mpx[0m;color:[36mvar[0m(--dim);text-transform:uppercase;letter-spacing:[33m.[0m[33m06[0m[33mem[0m}
+  [31mpre[0m{background:[36mvar[0m(--bg);border:[33m1[0m[33mpx[0m solid [36mvar[0m(--edge);border-radius:[33m6[0m[33mpx[0m;padding:[33m10[0m[33mpx[0m;
+    overflow:auto;font-family:[36mvar[0m(--mono);font-size:[33m11[0m[33m.[0m[33m5[0m[33mpx[0m;margin:[33m0[0m;max-height:[33m280[0m[33mpx[0m}
+  [34m.[0m[33mempty[0m{color:[36mvar[0m(--dim);padding:[33m22[0m[33mpx[0m;text-align:center}
+  [34m.[0m[33merr[0m{color:[36mvar[0m(--bad);font-size:[33m12[0m[33mpx[0m;margin-left:auto}
+  [31mbutton[0m[34m.[0m[33mgo[0m{background:[36mvar[0m(--accent);border:none;color:[36m#[0m[36m04131f[0m;border-radius:[33m6[0m[33mpx[0m;padding:[33m7[0m[33mpx[0m [33m13[0m[33mpx[0m;
+    font-weight:[33m600[0m;cursor:pointer;align-self:end}
+</[31mstyle[0m>
+</[31mhead[0m>
+<[31mbody[0m>
+<[31mheader[0m>
+  <[31mh1[0m>Agent Console</[31mh1[0m>
+  <[31mspan[0m [33mclass[0m=[32m"[0m[32msub[0m[32m"[0m>self-hosted [34m&[0m[33mmdash[0m[33m;[0m no telemetry leaves this deployment (§16.1)</[31mspan[0m>
+  <[31mnav[0m>
+    <[31mbutton[0m [33mdata-tab[0m=[32m"[0m[32mruns[0m[32m"[0m [33maria-selected[0m=[32m"[0m[32mtrue[0m[32m"[0m>Runs</[31mbutton[0m>
+    <[31mbutton[0m [33mdata-tab[0m=[32m"[0m[32manalytics[0m[32m"[0m [33maria-selected[0m=[32m"[0m[32mfalse[0m[32m"[0m>Analytics</[31mbutton[0m>
+    <[31mbutton[0m [33mdata-tab[0m=[32m"[0m[32mops[0m[32m"[0m [33maria-selected[0m=[32m"[0m[32mfalse[0m[32m"[0m>Ops</[31mbutton[0m>
+  </[31mnav[0m>
+  <[31mspan[0m [33mclass[0m=[32m"[0m[32merr[0m[32m"[0m [34mid[0m=[32m"[0m[32merr[0m[32m"[0m></[31mspan[0m>
+</[31mheader[0m>
+<[31mmain[0m>
+  <[31mdiv[0m [33mclass[0m=[32m"[0m[32mrow[0m[32m"[0m>
+    <[31mdiv[0m [33mclass[0m=[32m"[0m[32mfield[0m[32m"[0m><[31mlabel[0m [33mfor[0m=[32m"[0m[32mns[0m[32m"[0m>Namespace</[31mlabel[0m><[31minput[0m [34mid[0m=[32m"[0m[32mns[0m[32m"[0m [33mvalue[0m=[32m"[0m[32mdemo[0m[32m"[0m></[31mdiv[0m>
+    <[31mdiv[0m [33mclass[0m=[32m"[0m[32mfield[0m[32m"[0m><[31mlabel[0m [33mfor[0m=[32m"[0m[32mtenant[0m[32m"[0m>Tenant</[31mlabel[0m><[31minput[0m [34mid[0m=[32m"[0m[32mtenant[0m[32m"[0m [33mvalue[0m=[32m"[0m[32mmerchant-1[0m[32m"[0m></[31mdiv[0m>
+    <[31mdiv[0m [33mclass[0m=[32m"[0m[32mfield[0m[32m"[0m><[31mlabel[0m [33mfor[0m=[32m"[0m[32msubject[0m[32m"[0m>Caller</[31mlabel[0m><[31minput[0m [34mid[0m=[32m"[0m[32msubject[0m[32m"[0m [33mvalue[0m=[32m"[0m[32msvc:demo-client[0m[32m"[0m></[31mdiv[0m>
+    <[31mbutton[0m [33mclass[0m=[32m"[0m[32mgo[0m[32m"[0m [34mid[0m=[32m"[0m[32mreload[0m[32m"[0m>Reload</[31mbutton[0m>
+  </[31mdiv[0m>
+  <[31mdiv[0m [34mid[0m=[32m"[0m[32mview[0m[32m"[0m></[31mdiv[0m>
+</[31mmain[0m>
+<[31mscript[0m [33mtype[0m=[32m"[0m[32mmodule[0m[32m"[0m>
+[35mconst[0m [34m$[0m [35m=[0m ([36ms[0m) [35m=>[0m document[35m.[0mquerySelector(s);
+[35mconst[0m [34mel[0m [35m=[0m ([36mt[0m, [36ma[0m [35m=[0m {}, [35m...[0m[36mkids[0m) [35m=>[0m {
+  [35mconst[0m n [35m=[0m document[35m.[0mcreateElement(t);
+  [35mfor[0m ([35mconst[0m [k, v] [35mof[0m [33mObject[0m[35m.[0mentries(a)) {
+    [35mif[0m (k [35m===[0m [32m'[0m[32mclass[0m[32m'[0m) n[35m.[0mclassName [35m=[0m v; [35melse[0m [35mif[0m (k [35m===[0m [32m'[0m[32mtext[0m[32m'[0m) n[35m.[0mtextContent [35m=[0m v; [35melse[0m n[35m.[0msetAttribute(k, v);
+  }
+  [35mfor[0m ([35mconst[0m kid [35mof[0m kids[35m.[0mflat()) [35mif[0m (kid [35m!=[0m [33mnull[0m) n[35m.[0mappend(kid);
+  [35mreturn[0m n;
+};
+[35mconst[0m [34mheaders[0m [35m=[0m () [35m=>[0m ({
+  [32m'[0m[32mcontent-type[0m[32m'[0m: [32m'[0m[32mapplication/json[0m[32m'[0m,
+  [32m'[0m[32mx-caller-subject[0m[32m'[0m: $([32m'[0m[32m#subject[0m[32m'[0m)[35m.[0mvalue,
+  [32m'[0m[32mx-namespace[0m[32m'[0m: $([32m'[0m[32m#ns[0m[32m'[0m)[35m.[0mvalue,
+  [32m'[0m[32mx-tenant-ref[0m[32m'[0m: $([32m'[0m[32m#tenant[0m[32m'[0m)[35m.[0mvalue,
+});
+[35masync[0m [35mfunction[0m [34mapi[0m([36mpath[0m) {
+  [35mconst[0m res [35m=[0m [35mawait[0m fetch(path, { [32mheaders[0m[33m:[0m headers() });
+  [35mif[0m ([35m![0mres[35m.[0mok) [35mthrow[0m [35mnew[0m [33mError[0m([35m`[0m[35m${[0mres[35m.[0mstatus[35m}[0m[32m [0m[35m${[0mpath[35m}[0m[35m`[0m);
+  [35mreturn[0m res[35m.[0mjson();
+}
+[35mconst[0m [34mms[0m [35m=[0m ([36mv[0m) [35m=>[0m (v [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m [35m:[0m v [35m>=[0m [33m1000[0m [35m?[0m [35m`[0m[35m${[0m(v [35m/[0m [33m1000[0m)[35m.[0mtoFixed([33m2[0m)[35m}[0m[32ms[0m[35m`[0m [35m:[0m [35m`[0m[35m${[0m[33mMath[0m[35m.[0mround(v)[35m}[0m[32mm[0m[32ms[0m[35m`[0m);
+[35mconst[0m [34mmoney[0m [35m=[0m ([36mmicros[0m) [35m=>[0m [35m`[0m[32m$[0m[35m${[0m(micros [35m/[0m [33m1e6[0m)[35m.[0mtoFixed([33m6[0m)[35m}[0m[35m`[0m;
+[35mlet[0m tab [35m=[0m [32m'[0m[32mruns[0m[32m'[0m;
+
+[35masync[0m [35mfunction[0m [34mrender[0m() {
+  $([32m'[0m[32m#err[0m[32m'[0m)[35m.[0mtextContent [35m=[0m [32m'[0m[32m'[0m;
+  [35mtry[0m { [35mawait[0m views[tab](); }
+  [35mcatch[0m (e) { $([32m'[0m[32m#err[0m[32m'[0m)[35m.[0mtextContent [35m=[0m e[35m.[0mmessage; }
+}
+
+[35mconst[0m views [35m=[0m {
+  [35masync[0m [34mruns[0m() {
+    [35mconst[0m { threads } [35m=[0m [35mawait[0m api([32m'[0m[32m/v1/threads[0m[32m'[0m);
+    [35mconst[0m rows [35m=[0m [];
+    [35mfor[0m ([35mconst[0m t [35mof[0m threads[35m.[0mslice([33m0[0m, [33m12[0m)) {
+      [35mconst[0m { runs } [35m=[0m [35mawait[0m api([35m`[0m[32m/[0m[32mv[0m[32m1[0m[32m/[0m[32mt[0m[32mh[0m[32mr[0m[32me[0m[32ma[0m[32md[0m[32ms[0m[32m/[0m[35m${[0mt[35m.[0mid[35m}[0m[32m/[0m[32mr[0m[32mu[0m[32mn[0m[32ms[0m[35m`[0m);
+      [35mfor[0m ([35mconst[0m r [35mof[0m runs) rows[35m.[0mpush({ [35m...[0mr, [32mthread[0m[33m:[0m t[35m.[0mid, [32mtitle[0m[33m:[0m t[35m.[0mtitle });
+    }
+    rows[35m.[0msort(([36ma[0m, [36mb[0m) [35m=>[0m [35mnew[0m [33mDate[0m(b[35m.[0mcreated_at) [35m-[0m [35mnew[0m [33mDate[0m(a[35m.[0mcreated_at));
+
+    [35mconst[0m table [35m=[0m el([32m'[0m[32mtable[0m[32m'[0m, {},
+      el([32m'[0m[32mthead[0m[32m'[0m, {}, el([32m'[0m[32mtr[0m[32m'[0m, {},
+        [35m...[0m[[32m'[0m[32mRun[0m[32m'[0m, [32m'[0m[32mThread[0m[32m'[0m, [32m'[0m[32mStatus[0m[32m'[0m, [32m'[0m[32mSteps[0m[32m'[0m, [32m'[0m[32mCost[0m[32m'[0m, [32m'[0m[32mWhen[0m[32m'[0m][35m.[0mmap(([36mh[0m) [35m=>[0m el([32m'[0m[32mth[0m[32m'[0m, { [32mtext[0m[33m:[0m h })))),
+      el([32m'[0m[32mtbody[0m[32m'[0m, {}, rows[35m.[0mslice([33m0[0m, [33m60[0m)[35m.[0mmap(([36mr[0m) [35m=>[0m
+        el([32m'[0m[32mtr[0m[32m'[0m, { [32m'[0m[32mdata-run[0m[32m'[0m: r[35m.[0mid },
+          el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m r[35m.[0mid[35m.[0mslice([33m0[0m, [33m8[0m) }),
+          el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mtext[0m[33m:[0m r[35m.[0mtitle [35m||[0m r[35m.[0mthread[35m.[0mslice([33m0[0m, [33m8[0m) }),
+          el([32m'[0m[32mtd[0m[32m'[0m, {}, el([32m'[0m[32mspan[0m[32m'[0m, { [32mclass[0m[33m:[0m [35m`[0m[32mp[0m[32mi[0m[32ml[0m[32ml[0m[32m [0m[35m${[0mr[35m.[0mstatus[35m}[0m[35m`[0m, [32mtext[0m[33m:[0m r[35m.[0mstatus })),
+          el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(r[35m.[0mstep_count) }),
+          el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m money([33mNumber[0m(r[35m.[0mcost_micros)) }),
+          el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mtext[0m[33m:[0m [35mnew[0m [33mDate[0m(r[35m.[0mcreated_at)[35m.[0mtoLocaleTimeString() })))));
+
+    table[35m.[0maddEventListener([32m'[0m[32mclick[0m[32m'[0m, ([36me[0m) [35m=>[0m {
+      [35mconst[0m id [35m=[0m e[35m.[0mtarget[35m.[0mclosest([32m'[0m[32mtr[0m[32m'[0m)[35m?[0m[35m.[0mdataset[35m.[0mrun;
+      [35mif[0m (id) showTrace(id);
+    });
+    $([32m'[0m[32m#view[0m[32m'[0m)[35m.[0mreplaceChildren(rows[35m.[0mlength [35m?[0m table [35m:[0m el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mempty[0m[32m'[0m, [32mtext[0m[33m:[0m [32m'[0m[32mNo runs yet.[0m[32m'[0m }),
+      el([32m'[0m[32mdiv[0m[32m'[0m, { [32mid[0m[33m:[0m [32m'[0m[32mtrace[0m[32m'[0m }));
+  },
+
+  [35masync[0m [34manalytics[0m() {
+    [35mconst[0m [versions, latency, tools, memory, feedback] [35m=[0m [35mawait[0m [33mPromise[0m[35m.[0mall([
+      api([32m'[0m[32m/v1/analytics/versions?hours=168[0m[32m'[0m), api([32m'[0m[32m/v1/analytics/latency?hours=168[0m[32m'[0m),
+      api([32m'[0m[32m/v1/analytics/tools?hours=168[0m[32m'[0m), api([32m'[0m[32m/v1/analytics/memory?hours=168[0m[32m'[0m),
+      api([32m'[0m[32m/v1/feedback/summary?hours=168[0m[32m'[0m),
+    ]);
+    [35mconst[0m totals [35m=[0m versions[35m.[0mversions[35m.[0mreduce(([36ma[0m, [36mv[0m) [35m=>[0m ({
+      [32mruns[0m[33m:[0m a[35m.[0mruns [35m+[0m v[35m.[0mruns, [32mok[0m[33m:[0m a[35m.[0mok [35m+[0m v[35m.[0mcompleted, [32mcost[0m[33m:[0m a[35m.[0mcost [35m+[0m v[35m.[0mcostMicros }), { [32mruns[0m[33m:[0m [33m0[0m, [32mok[0m[33m:[0m [33m0[0m, [32mcost[0m[33m:[0m [33m0[0m });
+
+    $([32m'[0m[32m#view[0m[32m'[0m)[35m.[0mreplaceChildren(
+      el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mgrid[0m[32m'[0m },
+        stat([32m'[0m[32mRuns (7d)[0m[32m'[0m, totals[35m.[0mruns),
+        stat([32m'[0m[32mSuccess[0m[32m'[0m, totals[35m.[0mruns [35m?[0m [35m`[0m[35m${[0m[33mMath[0m[35m.[0mround((totals[35m.[0mok [35m/[0m totals[35m.[0mruns) [35m*[0m [33m100[0m)[35m}[0m[32m%[0m[35m`[0m [35m:[0m [32m'[0m[32m—[0m[32m'[0m),
+        stat([32m'[0m[32mSpend[0m[32m'[0m, money(totals[35m.[0mcost)),
+        stat([32m'[0m[32mQueue p95[0m[32m'[0m, ms(latency[35m.[0mqueueWaitMs[35m.[0mp95))),
+      card([32m'[0m[32mBy agent version — is the new one better?[0m[32m'[0m, versionTable(versions[35m.[0mversions)),
+      card([32m'[0m[32mWhere the time goes[0m[32m'[0m, latencyPanel(latency)),
+      card([32m'[0m[32mTool health[0m[32m'[0m, toolTable(tools[35m.[0mtools)),
+      card([32m'[0m[32mMemory effectiveness[0m[32m'[0m, memoryPanel(memory)),
+      card([32m'[0m[32mFeedback[0m[32m'[0m, feedbackTable(feedback[35m.[0msummary)));
+  },
+
+  [35masync[0m [34mops[0m() {
+    [35mconst[0m [subsystems, dead] [35m=[0m [35mawait[0m [33mPromise[0m[35m.[0mall([
+      fetch([32m'[0m[32m/v1/ops/subsystems[0m[32m'[0m)[35m.[0mthen(([36mr[0m) [35m=>[0m r[35m.[0mjson()),
+      api([32m'[0m[32m/v1/ops/dead-letters[0m[32m'[0m),
+    ]);
+    $([32m'[0m[32m#view[0m[32m'[0m)[35m.[0mreplaceChildren(
+      card([32m'[0m[32mSubsystems[0m[32m'[0m, el([32m'[0m[32mpre[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mJSON[0m[35m.[0mstringify(subsystems, [33mnull[0m, [33m2[0m) })),
+      card([35m`[0m[32mD[0m[32me[0m[32ma[0m[32md[0m[32m [0m[32ml[0m[32me[0m[32mt[0m[32mt[0m[32me[0m[32mr[0m[32ms[0m[32m [0m[32m([0m[35m${[0mdead[35m.[0mdeadLetters[35m.[0mlength[35m}[0m[32m [0m[32mo[0m[32mp[0m[32me[0m[32mn[0m[32m)[0m[35m`[0m, dead[35m.[0mdeadLetters[35m.[0mlength
+        [35m?[0m el([32m'[0m[32mtable[0m[32m'[0m, {},
+            el([32m'[0m[32mthead[0m[32m'[0m, {}, el([32m'[0m[32mtr[0m[32m'[0m, {}, [35m...[0m[[32m'[0m[32mRun[0m[32m'[0m, [32m'[0m[32mReason[0m[32m'[0m, [32m'[0m[32mAttempts[0m[32m'[0m, [32m'[0m[32mWorker[0m[32m'[0m, [32m'[0m[32mWhen[0m[32m'[0m]
+              [35m.[0mmap(([36mh[0m) [35m=>[0m el([32m'[0m[32mth[0m[32m'[0m, { [32mtext[0m[33m:[0m h })))),
+            el([32m'[0m[32mtbody[0m[32m'[0m, {}, dead[35m.[0mdeadLetters[35m.[0mmap(([36md[0m) [35m=>[0m el([32m'[0m[32mtr[0m[32m'[0m, {},
+              el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m d[35m.[0mrun_id[35m.[0mslice([33m0[0m, [33m8[0m) }),
+              el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m d[35m.[0mreason }),
+              el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(d[35m.[0mattempts) }),
+              el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim mono[0m[32m'[0m, [32mtext[0m[33m:[0m d[35m.[0mlast_worker [35m?[0m[35m?[0m [32m'[0m[32m—[0m[32m'[0m }),
+              el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mtext[0m[33m:[0m [35mnew[0m [33mDate[0m(d[35m.[0mcreated_at)[35m.[0mtoLocaleString() })))))
+        [35m:[0m el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mempty[0m[32m'[0m, [32mtext[0m[33m:[0m [32m'[0m[32mNothing dead-lettered.[0m[32m'[0m })));
+  },
+};
+
+[35mconst[0m [34mstat[0m [35m=[0m ([36mlabel[0m, [36mvalue[0m) [35m=>[0m el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mstat[0m[32m'[0m },
+  el([32m'[0m[32mb[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(value) }), el([32m'[0m[32mspan[0m[32m'[0m, { [32mtext[0m[33m:[0m label }));
+[35mconst[0m [34mcard[0m [35m=[0m ([36mtitle[0m, [36mbody[0m) [35m=>[0m el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mcard[0m[32m'[0m }, el([32m'[0m[32mh2[0m[32m'[0m, { [32mtext[0m[33m:[0m title }), body);
+
+[35mfunction[0m [34mversionTable[0m([36mrows[0m) {
+  [35mif[0m ([35m![0mrows[35m.[0mlength) [35mreturn[0m el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mempty[0m[32m'[0m, [32mtext[0m[33m:[0m [32m'[0m[32mNo runs in this window.[0m[32m'[0m });
+  [35mreturn[0m el([32m'[0m[32mtable[0m[32m'[0m, {},
+    el([32m'[0m[32mthead[0m[32m'[0m, {}, el([32m'[0m[32mtr[0m[32m'[0m, {}, [35m...[0m[[32m'[0m[32mAgent[0m[32m'[0m, [32m'[0m[32mVer[0m[32m'[0m, [32m'[0m[32mRuns[0m[32m'[0m, [32m'[0m[32mSuccess[0m[32m'[0m, [32m'[0m[32mp50[0m[32m'[0m, [32m'[0m[32mp95[0m[32m'[0m, [32m'[0m[32mMemory[0m[32m'[0m, [32m'[0m[32mCost[0m[32m'[0m]
+      [35m.[0mmap(([36mh[0m) [35m=>[0m el([32m'[0m[32mth[0m[32m'[0m, { [32mtext[0m[33m:[0m h })))),
+    el([32m'[0m[32mtbody[0m[32m'[0m, {}, rows[35m.[0mmap(([36mv[0m) [35m=>[0m el([32m'[0m[32mtr[0m[32m'[0m, {},
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m v[35m.[0magent [35m?[0m[35m?[0m [32m'[0m[32mephemeral[0m[32m'[0m }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m v[35m.[0mversion [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m : [35m`[0m[32mv[0m[35m${[0mv[35m.[0mversion[35m}[0m[35m`[0m }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(v[35m.[0mruns) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m v[35m.[0msuccessRate [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m : [35m`[0m[35m${[0m[33mMath[0m[35m.[0mround(v[35m.[0msuccessRate [35m*[0m [33m100[0m)[35m}[0m[32m%[0m[35m`[0m }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m ms(v[35m.[0mlatencyMs[35m.[0mp50) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m ms(v[35m.[0mlatencyMs[35m.[0mp95) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mtext[0m[33m:[0m v[35m.[0mmemoryEnabled [35m?[0m [32m'[0m[32mon[0m[32m'[0m : [32m'[0m[32moff[0m[32m'[0m }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m money(v[35m.[0mcostMicros) })))));
+}
+
+[35mfunction[0m [34mlatencyPanel[0m([36ml[0m) {
+  [35mconst[0m parts [35m=[0m [
+    [[32m'[0m[32mqueue[0m[32m'[0m, l[35m.[0mqueueWaitMs[35m.[0mp50 [35m?[0m[35m?[0m [33m0[0m, [32m'[0m[32mvar(--warn)[0m[32m'[0m],
+    [35m...[0ml[35m.[0msteps[35m.[0mmap(([36ms[0m) [35m=>[0m [s[35m.[0mkind[35m.[0mreplace([32m'[0m[32m_call[0m[32m'[0m, [32m'[0m[32m'[0m), s[35m.[0mp50Ms [35m?[0m[35m?[0m [33m0[0m,
+      s[35m.[0mkind [35m===[0m [32m'[0m[32mmodel_call[0m[32m'[0m [35m?[0m [32m'[0m[32mvar(--accent)[0m[32m'[0m [35m:[0m [32m'[0m[32mvar(--ok)[0m[32m'[0m]),
+  ][35m.[0mfilter(([, [36mv[0m]) [35m=>[0m v [35m>[0m [33m0[0m);
+  [35mconst[0m total [35m=[0m parts[35m.[0mreduce(([36ma[0m, [, [36mv[0m]) [35m=>[0m a [35m+[0m v, [33m0[0m) [35m||[0m [33m1[0m;
+  [35mreturn[0m el([32m'[0m[32mdiv[0m[32m'[0m, {},
+    el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mbar[0m[32m'[0m }, parts[35m.[0mmap(([[36mname[0m, [36mv[0m, [36mcolour[0m]) [35m=>[0m
+      el([32m'[0m[32mspan[0m[32m'[0m, { [32mstyle[0m[33m:[0m [35m`[0m[32mf[0m[32ml[0m[32me[0m[32mx[0m[32m:[0m[35m${[0mv[35m}[0m[32m;[0m[32mb[0m[32ma[0m[32mc[0m[32mk[0m[32mg[0m[32mr[0m[32mo[0m[32mu[0m[32mn[0m[32md[0m[32m:[0m[35m${[0mcolour[35m}[0m[35m`[0m, [32mtext[0m[33m:[0m v [35m/[0m total [35m>[0m [33m0.12[0m [35m?[0m name : [32m'[0m[32m'[0m }))),
+    el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mlegend[0m[32m'[0m }, parts[35m.[0mmap(([[36mname[0m, [36mv[0m, [36mcolour[0m]) [35m=>[0m
+      el([32m'[0m[32mspan[0m[32m'[0m, {}, el([32m'[0m[32mi[0m[32m'[0m, { [32mstyle[0m[33m:[0m [35m`[0m[32mb[0m[32ma[0m[32mc[0m[32mk[0m[32mg[0m[32mr[0m[32mo[0m[32mu[0m[32mn[0m[32md[0m[32m:[0m[35m${[0mcolour[35m}[0m[35m`[0m }), [35m`[0m[35m${[0mname[35m}[0m[32m [0m[35m${[0mms(v)[35m}[0m[35m`[0m))),
+    el([32m'[0m[32mp[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mstyle[0m[33m:[0m [32m'[0m[32mmargin:9px 0 0;font-size:12px[0m[32m'[0m,
+      [32mtext[0m[33m:[0m [32m'[0m[32mQueue wait is separate from work: "the agent is slow" and "the queue is deep" have different fixes.[0m[32m'[0m }));
+}
+
+[35mfunction[0m [34mtoolTable[0m([36mrows[0m) {
+  [35mif[0m ([35m![0mrows[35m.[0mlength) [35mreturn[0m el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mempty[0m[32m'[0m, [32mtext[0m[33m:[0m [32m'[0m[32mNo tool calls yet.[0m[32m'[0m });
+  [35mreturn[0m el([32m'[0m[32mtable[0m[32m'[0m, {},
+    el([32m'[0m[32mthead[0m[32m'[0m, {}, el([32m'[0m[32mtr[0m[32m'[0m, {}, [35m...[0m[[32m'[0m[32mTool[0m[32m'[0m, [32m'[0m[32mOrigin[0m[32m'[0m, [32m'[0m[32mCalls[0m[32m'[0m, [32m'[0m[32mFailures[0m[32m'[0m, [32m'[0m[32mp95[0m[32m'[0m, [32m'[0m[32mGated[0m[32m'[0m]
+      [35m.[0mmap(([36mh[0m) [35m=>[0m el([32m'[0m[32mth[0m[32m'[0m, { [32mtext[0m[33m:[0m h })))),
+    el([32m'[0m[32mtbody[0m[32m'[0m, {}, rows[35m.[0mmap(([36mt[0m) [35m=>[0m el([32m'[0m[32mtr[0m[32m'[0m, {},
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m t[35m.[0mtool }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mtext[0m[33m:[0m t[35m.[0morigin }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(t[35m.[0mcalls) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m t[35m.[0mfailureRate [35m>[0m [33m0[0m [35m?[0m [32m'[0m[32merr[0m[32m'[0m : [32m'[0m[32m'[0m, [32mtext[0m[33m:[0m [35m`[0m[35m${[0m[33mMath[0m[35m.[0mround(t[35m.[0mfailureRate [35m*[0m [33m100[0m)[35m}[0m[32m%[0m[35m`[0m }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m ms(t[35m.[0mp95Ms) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mtext[0m[33m:[0m [33mString[0m(t[35m.[0mapprovalGated) })))));
+}
+
+[35mfunction[0m [34mmemoryPanel[0m([36mm[0m) {
+  [35mreturn[0m el([32m'[0m[32mdiv[0m[32m'[0m, {},
+    el([32m'[0m[32mtable[0m[32m'[0m, {},
+      el([32m'[0m[32mthead[0m[32m'[0m, {}, el([32m'[0m[32mtr[0m[32m'[0m, {}, [35m...[0m[[32m'[0m[32mMemory[0m[32m'[0m, [32m'[0m[32mRuns[0m[32m'[0m, [32m'[0m[32mSuccess[0m[32m'[0m, [32m'[0m[32mAvg steps[0m[32m'[0m, [32m'[0m[32mp95[0m[32m'[0m, [32m'[0m[32mRating[0m[32m'[0m]
+        [35m.[0mmap(([36mh[0m) [35m=>[0m el([32m'[0m[32mth[0m[32m'[0m, { [32mtext[0m[33m:[0m h })))),
+      el([32m'[0m[32mtbody[0m[32m'[0m, {}, m[35m.[0mcohorts[35m.[0mmap(([36mc[0m) [35m=>[0m el([32m'[0m[32mtr[0m[32m'[0m, {},
+        el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m c[35m.[0mmemoryEnabled [35m?[0m [32m'[0m[32menabled[0m[32m'[0m : [32m'[0m[32mdisabled[0m[32m'[0m }),
+        el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(c[35m.[0mruns) }),
+        el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m c[35m.[0msuccessRate [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m : [35m`[0m[35m${[0m[33mMath[0m[35m.[0mround(c[35m.[0msuccessRate [35m*[0m [33m100[0m)[35m}[0m[32m%[0m[35m`[0m }),
+        el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m c[35m.[0mavgSteps [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m : c[35m.[0mavgSteps[35m.[0mtoFixed([33m1[0m) }),
+        el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m ms(c[35m.[0mp95Ms) }),
+        el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m c[35m.[0mavgRating [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m : c[35m.[0mavgRating[35m.[0mtoFixed([33m2[0m) }))))),
+    el([32m'[0m[32mp[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mstyle[0m[33m:[0m [32m'[0m[32mmargin:9px 0 0;font-size:12px[0m[32m'[0m, [32mtext[0m[33m:[0m m[35m.[0mcaveat }));
+}
+
+[35mfunction[0m [34mfeedbackTable[0m([36mrows[0m) {
+  [35mif[0m ([35m![0mrows[35m.[0mlength) [35mreturn[0m el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mempty[0m[32m'[0m, [32mtext[0m[33m:[0m [32m'[0m[32mNo feedback yet.[0m[32m'[0m });
+  [35mreturn[0m el([32m'[0m[32mtable[0m[32m'[0m, {},
+    el([32m'[0m[32mthead[0m[32m'[0m, {}, el([32m'[0m[32mtr[0m[32m'[0m, {}, [35m...[0m[[32m'[0m[32mAgent[0m[32m'[0m, [32m'[0m[32mVer[0m[32m'[0m, [32m'[0m[32mTotal[0m[32m'[0m, [32m'[0m[32mAvg[0m[32m'[0m, [32m'[0m[32mNegative[0m[32m'[0m, [32m'[0m[32mCorrections[0m[32m'[0m]
+      [35m.[0mmap(([36mh[0m) [35m=>[0m el([32m'[0m[32mth[0m[32m'[0m, { [32mtext[0m[33m:[0m h })))),
+    el([32m'[0m[32mtbody[0m[32m'[0m, {}, rows[35m.[0mmap(([36mf[0m) [35m=>[0m el([32m'[0m[32mtr[0m[32m'[0m, {},
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m f[35m.[0magent [35m?[0m[35m?[0m [32m'[0m[32mephemeral[0m[32m'[0m }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m f[35m.[0mversion [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m : [35m`[0m[32mv[0m[35m${[0mf[35m.[0mversion[35m}[0m[35m`[0m }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(f[35m.[0mtotal) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m f[35m.[0mavgRating [35m==[0m [33mnull[0m [35m?[0m [32m'[0m[32m—[0m[32m'[0m : f[35m.[0mavgRating[35m.[0mtoFixed([33m2[0m) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(f[35m.[0mnegative) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(f[35m.[0mcorrections) })))));
+}
+
+[35masync[0m [35mfunction[0m [34mshowTrace[0m([36mrunId[0m) {
+  [35mconst[0m t [35m=[0m [35mawait[0m api([35m`[0m[32m/[0m[32mv[0m[32m1[0m[32m/[0m[32mr[0m[32mu[0m[32mn[0m[32ms[0m[32m/[0m[35m${[0mrunId[35m}[0m[32m/[0m[32mt[0m[32mr[0m[32ma[0m[32mc[0m[32me[0m[35m`[0m);
+  [35mconst[0m l [35m=[0m t[35m.[0mlatency;
+  [35mconst[0m parts [35m=[0m [[[32m'[0m[32mqueue[0m[32m'[0m, l[35m.[0mqueueWaitMs [35m?[0m[35m?[0m [33m0[0m, [32m'[0m[32mvar(--warn)[0m[32m'[0m], [[32m'[0m[32mmodel[0m[32m'[0m, l[35m.[0mmodelMs, [32m'[0m[32mvar(--accent)[0m[32m'[0m],
+    [[32m'[0m[32mtool[0m[32m'[0m, l[35m.[0mtoolMs, [32m'[0m[32mvar(--ok)[0m[32m'[0m], [[32m'[0m[32mhuman[0m[32m'[0m, l[35m.[0mhumanWaitMs, [32m'[0m[32mvar(--bad)[0m[32m'[0m],
+    [[32m'[0m[32mother[0m[32m'[0m, l[35m.[0munaccountedMs [35m?[0m[35m?[0m [33m0[0m, [32m'[0m[32mvar(--edge)[0m[32m'[0m]][35m.[0mfilter(([, [36mv[0m]) [35m=>[0m v [35m>[0m [33m0[0m);
+  [35mconst[0m total [35m=[0m parts[35m.[0mreduce(([36ma[0m, [, [36mv[0m]) [35m=>[0m a [35m+[0m v, [33m0[0m) [35m||[0m [33m1[0m;
+
+  [35mconst[0m steps [35m=[0m el([32m'[0m[32mtable[0m[32m'[0m, {},
+    el([32m'[0m[32mthead[0m[32m'[0m, {}, el([32m'[0m[32mtr[0m[32m'[0m, {}, [35m...[0m[[32m'[0m[32m#[0m[32m'[0m, [32m'[0m[32mKind[0m[32m'[0m, [32m'[0m[32mStatus[0m[32m'[0m, [32m'[0m[32mLatency[0m[32m'[0m, [32m'[0m[32mDetail[0m[32m'[0m][35m.[0mmap(([36mh[0m) [35m=>[0m el([32m'[0m[32mth[0m[32m'[0m, { [32mtext[0m[33m:[0m h })))),
+    el([32m'[0m[32mtbody[0m[32m'[0m, {}, t[35m.[0msteps[35m.[0mmap(([36ms[0m) [35m=>[0m el([32m'[0m[32mtr[0m[32m'[0m, {},
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m [33mString[0m(s[35m.[0mseq) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mtext[0m[33m:[0m s[35m.[0mkind }),
+      el([32m'[0m[32mtd[0m[32m'[0m, {}, el([32m'[0m[32mspan[0m[32m'[0m, { [32mclass[0m[33m:[0m [35m`[0m[32mp[0m[32mi[0m[32ml[0m[32ml[0m[32m [0m[35m${[0ms[35m.[0mstatus [35m===[0m [32m'[0m[32msucceeded[0m[32m'[0m [35m?[0m [32m'[0m[32mcompleted[0m[32m'[0m [35m:[0m s[35m.[0mstatus[35m}[0m[35m`[0m, [32mtext[0m[33m:[0m s[35m.[0mstatus })),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono[0m[32m'[0m, [32mtext[0m[33m:[0m ms(s[35m.[0mlatencyMs) }),
+      el([32m'[0m[32mtd[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mmono dim[0m[32m'[0m, [32mtext[0m[33m:[0m [33mJSON[0m[35m.[0mstringify(s[35m.[0mdetail)[35m.[0mslice([33m0[0m, [33m90[0m) })))));
+
+  document[35m.[0mquerySelector([32m'[0m[32m#trace[0m[32m'[0m)[35m.[0mreplaceChildren(card([35m`[0m[32mR[0m[32mu[0m[32mn[0m[32m [0m[35m${[0mrunId[35m.[0mslice([33m0[0m, [33m8[0m)[35m}[0m[32m [0m[32m—[0m[32m [0m[35m${[0mt[35m.[0mstatus[35m}[0m[35m`[0m,
+    el([32m'[0m[32mdiv[0m[32m'[0m, {},
+      el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mbar[0m[32m'[0m }, parts[35m.[0mmap(([[36mn[0m, [36mv[0m, [36mc[0m]) [35m=>[0m
+        el([32m'[0m[32mspan[0m[32m'[0m, { [32mstyle[0m[33m:[0m [35m`[0m[32mf[0m[32ml[0m[32me[0m[32mx[0m[32m:[0m[35m${[0mv[35m}[0m[32m;[0m[32mb[0m[32ma[0m[32mc[0m[32mk[0m[32mg[0m[32mr[0m[32mo[0m[32mu[0m[32mn[0m[32md[0m[32m:[0m[35m${[0mc[35m}[0m[35m`[0m, [32mtext[0m[33m:[0m v [35m/[0m total [35m>[0m [33m0.12[0m [35m?[0m n : [32m'[0m[32m'[0m }))),
+      el([32m'[0m[32mdiv[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mlegend[0m[32m'[0m }, parts[35m.[0mmap(([[36mn[0m, [36mv[0m, [36mc[0m]) [35m=>[0m
+        el([32m'[0m[32mspan[0m[32m'[0m, {}, el([32m'[0m[32mi[0m[32m'[0m, { [32mstyle[0m[33m:[0m [35m`[0m[32mb[0m[32ma[0m[32mc[0m[32mk[0m[32mg[0m[32mr[0m[32mo[0m[32mu[0m[32mn[0m[32md[0m[32m:[0m[35m${[0mc[35m}[0m[35m`[0m }), [35m`[0m[35m${[0mn[35m}[0m[32m [0m[35m${[0mms(v)[35m}[0m[35m`[0m))),
+      steps,
+      t[35m.[0mchildren[35m.[0mlength [35m?[0m el([32m'[0m[32mp[0m[32m'[0m, { [32mclass[0m[33m:[0m [32m'[0m[32mdim[0m[32m'[0m, [32mstyle[0m[33m:[0m [32m'[0m[32mmargin-top:9px[0m[32m'[0m,
+        [32mtext[0m[33m:[0m [35m`[0m[35m${[0mt[35m.[0mchildren[35m.[0mlength[35m}[0m[32m [0m[32md[0m[32me[0m[32ml[0m[32me[0m[32mg[0m[32ma[0m[32mt[0m[32me[0m[32md[0m[32m [0m[32mc[0m[32mh[0m[32mi[0m[32ml[0m[32md[0m[32m [0m[32mr[0m[32mu[0m[32mn[0m[32m([0m[32ms[0m[32m)[0m[35m`[0m }) [35m:[0m [33mnull[0m)));
+  document[35m.[0mquerySelector([32m'[0m[32m#trace[0m[32m'[0m)[35m.[0mscrollIntoView({ [32mbehavior[0m[33m:[0m [32m'[0m[32msmooth[0m[32m'[0m, [32mblock[0m[33m:[0m [32m'[0m[32mnearest[0m[32m'[0m });
+}
+
+document[35m.[0mquerySelectorAll([32m'[0m[32mnav button[0m[32m'[0m)[35m.[0mforEach(([36mb[0m) [35m=>[0m b[35m.[0maddEventListener([32m'[0m[32mclick[0m[32m'[0m, () [35m=>[0m {
+  document[35m.[0mquerySelectorAll([32m'[0m[32mnav button[0m[32m'[0m)[35m.[0mforEach(([36mx[0m) [35m=>[0m x[35m.[0msetAttribute([32m'[0m[32maria-selected[0m[32m'[0m, [33mString[0m(x [35m===[0m b)));
+  tab [35m=[0m b[35m.[0mdataset[35m.[0mtab; render();
+}));
+$([32m'[0m[32m#reload[0m[32m'[0m)[35m.[0maddEventListener([32m'[0m[32mclick[0m[32m'[0m, render);
+render();
+</[31mscript[0m>
+</[31mbody[0m>
+</[31mhtml[0m>

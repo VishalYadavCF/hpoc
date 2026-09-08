@@ -1,0 +1,11 @@
+{
+  "description": "Archived events written at schema_version 1, before the tool/model payload changes. Kept verbatim: these are the shapes the log actually contains, and a change that cannot read them is a breaking change (§0.2).",
+  "events": [
+    { "event_type": "run.created",     "schema_version": 1, "payload": { "specHash": "abc123", "framework": "echo" } },
+    { "event_type": "run.started",     "schema_version": 1, "payload": { "resumedFromStep": null } },
+    { "event_type": "model.completed", "schema_version": 1, "payload": { "text": "hello", "tokens": 42 } },
+    { "event_type": "tool.called",     "schema_version": 1, "payload": { "toolRef": "demo.echo", "effects": ["read_only"] } },
+    { "event_type": "tool.completed",  "schema_version": 1, "payload": { "toolRef": "demo.echo", "result": { "ok": true } } },
+    { "event_type": "run.completed",   "schema_version": 1, "payload": { "output": { "text": "hello" } } }
+  ]
+}

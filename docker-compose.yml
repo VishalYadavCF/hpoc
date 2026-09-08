@@ -1,0 +1,50 @@
+# =====================================================================
+# Local infrastructure for hpoc.
+#
+#   docker-compose up -d          start
+#   docker-compose logs -f pg     follow
+#   docker-compose down           stop, keep data
+#   docker-compose down -v        stop, discard data (re-runs init scripts)
+#
+# Init scripts under db/postgres/init/ run ONCE, when the volume is empty.
+# Editing them afterwards does nothing until `down -v`.
+# =====================================================================
+
+name: hpoc
+
+services:
+  pg:
+    build:
+      context: ./db/postgres
+      dockerfile: Dockerfile
+    image: hpoc/postgres:17
+    container_name: hpoc-pg
+    restart: unless-stopped
+    ports:
+      # 5440 on the host. 5439 is already taken by another project's postgres.
+      - "5440:5432"
+    environment:
+      POSTGRES_USER: hpoc
+      POSTGRES_PASSWORD: hpoc
+      POSTGRES_DB: hpoc
+      # Deterministic collation. Locale drift between the container and a
+      # future host changes index ordering and silently corrupts btrees.
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8 --encoding=UTF8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./db/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    shm_size: 256mb
+    healthcheck:
+      # Asserts the extensions exist, not just that the port answers -
+      # see db/postgres/healthcheck.sh.
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  pgdata:
+    name: hpoc-pgdata

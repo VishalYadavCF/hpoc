@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/platform/**/*",
+    "src/domain/**/*"
+  ],
+  "exclude": [
+    "src/adapters/**/*",
+    "src/api/**/*",
+    "src/worker/**/*",
+    "src/scheduler/**/*",
+    "src/bootstrap/**/*",
+    "**/*.spec.ts",
+    "src/generated/**"
+  ]
+}

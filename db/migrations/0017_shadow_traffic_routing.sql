@@ -1,0 +1,12 @@
+-- migration: route shadow traffic (§15.5), not just record the intent
+--
+-- `deployments.shadow_from_version_id` has existed since the deployment table itself
+-- but nothing ever read it: a promotion could ask for a version to be shadowed and the
+-- request was silently accepted and never acted on. This is what a shadow RUN actually
+-- is -- a second execution against the shadowed version, linked back to the run it
+-- shadows so the two can be compared, and excluded from what the caller sees.
+--
+-- 'shadow' joins the initiator enum rather than reusing 'api': a shadow run was not
+-- requested by anyone, and billing, quota and observability all need to tell the two
+-- apart (§5.2 attribution, §15 lineage).
+ALTER TYPE run_initiator ADD VALUE 'shadow';

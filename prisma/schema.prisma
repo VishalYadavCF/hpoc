@@ -1,0 +1,1780 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+  moduleFormat    = "esm"
+  runtime         = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model admission_decisions {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id              String          @db.Uuid
+  namespace_id        String          @db.Uuid
+  spec_hash           String
+  agent_version_id    String?         @db.Uuid
+  caller_principal_id String          @db.Uuid
+  approved            Boolean
+  rejection_reasons   Json            @default("[]")
+  checks              Json            @default("{}")
+  decided_at          DateTime        @default(now()) @db.Timestamptz(6)
+  agent_versions      agent_versions? @relation(fields: [agent_version_id], references: [id], onUpdate: NoAction)
+  principals          principals      @relation(fields: [caller_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  namespaces          namespaces      @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                orgs            @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([caller_principal_id, spec_hash, decided_at(sort: Desc)], map: "admission_spec_hash_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model agent_version_mcp_servers {
+  agent_version_id String         @db.Uuid
+  mcp_server_id    String         @db.Uuid
+  allowed_tools    String[]
+  allow_sampling   Boolean        @default(false)
+  agent_versions   agent_versions @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_servers      mcp_servers    @relation(fields: [mcp_server_id], references: [id], onUpdate: NoAction)
+
+  @@id([agent_version_id, mcp_server_id])
+}
+
+model agent_version_peers {
+  agent_version_id String         @db.Uuid
+  peer_id          String         @db.Uuid
+  alias            String
+  agent_versions   agent_versions @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  peers            peers          @relation(fields: [peer_id], references: [id], onUpdate: NoAction)
+
+  @@id([agent_version_id, peer_id])
+  @@unique([agent_version_id, alias], map: "agent_version_peers_alias_unique")
+}
+
+model agent_version_speech {
+  agent_version_id   String           @db.Uuid
+  speech_provider_id String           @db.Uuid
+  speech_kind        speech_kind
+  agent_versions     agent_versions   @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  speech_providers   speech_providers @relation(fields: [speech_provider_id], references: [id], onUpdate: NoAction)
+
+  @@id([agent_version_id, speech_kind])
+}
+
+model agent_version_sub_agents {
+  agent_version_id String         @db.Uuid
+  namespace_id     String         @db.Uuid
+  sub_agent_id     String         @db.Uuid
+  alias            String
+  agent_versions   agent_versions @relation(fields: [agent_version_id, namespace_id], references: [id, namespace_id], onDelete: Cascade, onUpdate: NoAction)
+  agents           agents         @relation(fields: [sub_agent_id, namespace_id], references: [id, namespace_id], onUpdate: NoAction)
+
+  @@id([agent_version_id, sub_agent_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model agent_version_tools {
+  agent_version_id                                      String         @db.Uuid
+  tool_id                                               String         @db.Uuid
+  effects                                               effect_class[]
+  cache_ttl_seconds                                     Int?
+  cache_scope                                           String?
+  idempotency_key_tpl                                   String?
+  compensation_tool_id                                  String?        @db.Uuid
+  agent_versions                                        agent_versions @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tools_agent_version_tools_compensation_tool_idTotools tools?         @relation("agent_version_tools_compensation_tool_idTotools", fields: [compensation_tool_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  tools_agent_version_tools_tool_idTotools              tools          @relation("agent_version_tools_tool_idTotools", fields: [tool_id], references: [id], onUpdate: NoAction)
+
+  @@id([agent_version_id, tool_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model agent_versions {
+  id                                                             String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agent_id                                                       String?                     @db.Uuid
+  org_id                                                         String                      @db.Uuid
+  namespace_id                                                   String                      @db.Uuid
+  lifetime                                                       agent_lifetime
+  version                                                        Int?
+  spec                                                           Json
+  spec_hash                                                      String
+  workload_identity_id                                           String                      @db.Uuid
+  model_id                                                       String                      @db.Uuid
+  prompt_version_id                                              String?                     @db.Uuid
+  policy_version_id                                              String?                     @db.Uuid
+  durability                                                     durability_tier             @default(strict)
+  transport                                                      transport                   @default(sse)
+  data_class                                                     data_class                  @default(internal)
+  tenant_isolation                                               String                      @default("strict")
+  max_steps                                                      Int?
+  max_tokens                                                     BigInt?
+  max_cost_micros                                                BigInt?
+  step_timeout_ms                                                Int                         @default(30000)
+  run_timeout_ms                                                 Int                         @default(1800000)
+  max_retries                                                    Int                         @default(3) @db.SmallInt
+  max_concurrent_runs                                            Int?
+  on_saturation                                                  saturation_policy           @default(queue)
+  overridable_fields                                             String[]                    @default([])
+  created_by                                                     String?                     @db.Uuid
+  created_at                                                     DateTime                    @default(now()) @db.Timestamptz(6)
+  admission_decisions                                            admission_decisions[]
+  agent_version_collections                                      agent_version_collections[]
+  agent_version_mcp_servers                                      agent_version_mcp_servers[]
+  agent_version_peers                                            agent_version_peers[]
+  agent_version_skills                                           agent_version_skills[]
+  agent_version_speech                                           agent_version_speech[]
+  agent_version_sub_agents                                       agent_version_sub_agents[]
+  agent_version_tools                                            agent_version_tools[]
+  agents                                                         agents?                     @relation(fields: [agent_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  principals_agent_versions_created_byToprincipals               principals?                 @relation("agent_versions_created_byToprincipals", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  models                                                         models                      @relation(fields: [model_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  namespaces                                                     namespaces                  @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs                                                           orgs                        @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  policy_versions                                                policy_versions?            @relation(fields: [policy_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  prompt_versions                                                prompt_versions?            @relation(fields: [prompt_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  principals_agent_versions_workload_identity_idToprincipals     principals                  @relation("agent_versions_workload_identity_idToprincipals", fields: [workload_identity_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  deployments_deployments_agent_version_idToagent_versions       deployments[]               @relation("deployments_agent_version_idToagent_versions")
+  deployments_deployments_shadow_from_version_idToagent_versions deployments[]               @relation("deployments_shadow_from_version_idToagent_versions")
+  eval_runs                                                      eval_runs[]
+  eval_runs_eval_runs_executed_version_idToagent_versions        eval_runs[]                 @relation("eval_runs_executed_version_idToagent_versions")
+  feedback                                                       feedback[]
+  runs                                                           runs[]
+  triggers                                                       triggers[]
+
+  @@unique([agent_id, version])
+  @@unique([id, namespace_id])
+  @@unique([org_id, spec_hash], map: "agent_versions_ephemeral_spec_hash_uq", where: raw("(lifetime = 'ephemeral'::agent_lifetime)"))
+  @@index([org_id, spec_hash], map: "agent_versions_spec_hash_idx")
+}
+
+model agents {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                   String                     @db.Uuid
+  namespace_id             String                     @db.Uuid
+  name                     String                     @db.Citext
+  owner                    String
+  description              String?
+  expose_as_peer           Boolean                    @default(false)
+  archived_at              DateTime?                  @db.Timestamptz(6)
+  created_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  agent_version_sub_agents agent_version_sub_agents[]
+  agent_versions           agent_versions[]
+  namespaces               namespaces                 @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs                     orgs                       @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  deployments              deployments[]
+  memory_records           memory_records[]
+  peers                    peers[]
+  promotion_gates          promotion_gates[]
+  threads                  threads[]
+  triggers                 triggers[]
+
+  @@unique([id, namespace_id])
+  @@unique([namespace_id, name])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model artifacts {
+  id                                                                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                                                            String             @db.Uuid
+  namespace_id                                                      String             @db.Uuid
+  tenant_ref                                                        String
+  thread_id                                                         String?            @db.Uuid
+  produced_by_run_id                                                String?            @db.Uuid
+  produced_by_step_id                                               String?            @db.Uuid
+  content_hash                                                      String
+  storage_uri                                                       String
+  media_type                                                        String
+  size_bytes                                                        BigInt
+  encryption_key_ref                                                String
+  version                                                           Int                @default(1)
+  parent_artifact_id                                                String?            @db.Uuid
+  retention_policy                                                  String?
+  expires_at                                                        DateTime?          @db.Timestamptz(6)
+  legal_hold                                                        Boolean            @default(false)
+  state                                                             artifact_state     @default(live)
+  deleted_at                                                        DateTime?          @db.Timestamptz(6)
+  metadata                                                          Json               @default("{}")
+  created_at                                                        DateTime           @default(now()) @db.Timestamptz(6)
+  namespaces                                                        namespaces         @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs                                                              orgs               @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  artifacts                                                         artifacts?         @relation("artifactsToartifacts", fields: [parent_artifact_id], references: [id], onUpdate: NoAction)
+  other_artifacts                                                   artifacts[]        @relation("artifactsToartifacts")
+  runs_artifacts_produced_by_run_idToruns                           runs?              @relation("artifacts_produced_by_run_idToruns", fields: [produced_by_run_id], references: [id], onUpdate: NoAction)
+  steps_artifacts_produced_by_step_idTosteps                        steps?             @relation("artifacts_produced_by_step_idTosteps", fields: [produced_by_step_id], references: [id], onUpdate: NoAction)
+  threads                                                           threads?           @relation(fields: [thread_id], references: [id], onUpdate: NoAction)
+  checkpoints                                                       checkpoints[]
+  memory_records                                                    memory_records[]
+  runs_runs_input_artifact_idToartifacts                            runs[]             @relation("runs_input_artifact_idToartifacts")
+  runs_runs_output_artifact_idToartifacts                           runs[]             @relation("runs_output_artifact_idToartifacts")
+  steps_steps_input_artifact_idToartifacts                          steps[]            @relation("steps_input_artifact_idToartifacts")
+  steps_steps_output_artifact_idToartifacts                         steps[]            @relation("steps_output_artifact_idToartifacts")
+  tool_invocations_tool_invocations_request_artifact_idToartifacts  tool_invocations[] @relation("tool_invocations_request_artifact_idToartifacts")
+  tool_invocations_tool_invocations_response_artifact_idToartifacts tool_invocations[] @relation("tool_invocations_response_artifact_idToartifacts")
+
+  @@unique([org_id, namespace_id, tenant_ref, content_hash], map: "artifacts_tenant_content_hash_key")
+  @@index([expires_at], map: "artifacts_gc_idx", where: raw("((state = 'live'::artifact_state) AND (legal_hold = false) AND (expires_at IS NOT NULL))"))
+  @@index([thread_id, created_at(sort: Desc)], map: "artifacts_thread_idx")
+  @@index([produced_by_run_id], map: "artifacts_run_idx", where: raw("(produced_by_run_id IS NOT NULL)"))
+}
+
+/// This table is a partition table and requires additional setup for migrations. Visit https://pris.ly/d/partition-tables for more info.
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model audit_log {
+  id                        String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  occurred_at               DateTime @default(now()) @db.Timestamptz(6)
+  org_id                    String   @db.Uuid
+  namespace_id              String?  @db.Uuid
+  tenant_ref                String?
+  actor_principal_id        String   @db.Uuid
+  on_behalf_of_principal_id String?  @db.Uuid
+  action                    String
+  resource_kind             String
+  resource_id               String?  @db.Uuid
+  outcome                   String
+  reason                    String?
+  source_ip                 String?  @db.Inet
+  detail                    Json     @default("{}")
+
+  @@id([id, occurred_at])
+  @@index([actor_principal_id, occurred_at(sort: Desc)], map: "audit_actor_idx")
+  @@index([resource_kind, resource_id, occurred_at(sort: Desc)], map: "audit_resource_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model backpressure_policies {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id            String            @db.Uuid
+  level             enforcement_level
+  scope_ref         String
+  max_concurrency   Int?
+  max_rate_per_sec  Decimal?          @db.Decimal(12, 3)
+  queue_depth_limit Int?
+  on_saturation     saturation_policy
+  created_at        DateTime          @default(now()) @db.Timestamptz(6)
+  orgs              orgs              @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([org_id, level, scope_ref])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model budgets {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id            String            @db.Uuid
+  level             enforcement_level
+  scope_ref         String
+  period            String
+  limit_micros      BigInt
+  spent_micros      BigInt            @default(0)
+  period_started_at DateTime          @default(now()) @db.Timestamptz(6)
+  resets_at         DateTime?         @db.Timestamptz(6)
+  orgs              orgs              @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([org_id, level, scope_ref, period])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model capability_grants {
+  id                                                            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                                                        String       @db.Uuid
+  grant_source                                                  grant_source
+  namespace_id                                                  String?      @db.Uuid
+  grantee_principal_id                                          String?      @db.Uuid
+  resource_kind                                                 String
+  resource_id                                                   String       @db.Uuid
+  tenant_ref                                                    String?
+  constraints                                                   Json         @default("{}")
+  granted_by                                                    String       @db.Uuid
+  granted_at                                                    DateTime     @default(now()) @db.Timestamptz(6)
+  expires_at                                                    DateTime?    @db.Timestamptz(6)
+  revoked_at                                                    DateTime?    @db.Timestamptz(6)
+  principals_capability_grants_granted_byToprincipals           principals   @relation("capability_grants_granted_byToprincipals", fields: [granted_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  principals_capability_grants_grantee_principal_idToprincipals principals?  @relation("capability_grants_grantee_principal_idToprincipals", fields: [grantee_principal_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  namespaces                                                    namespaces?  @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                                                          orgs         @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([org_id, resource_kind, resource_id], map: "capability_grants_lookup_idx", where: raw("(revoked_at IS NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model checkpoints {
+  id                                               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id                                           String          @db.Uuid
+  step_seq                                         Int
+  schema_version                                   Int
+  parent_checkpoint_id                             String?         @db.Uuid
+  state                                            Json?
+  state_artifact_id                                String?         @db.Uuid
+  state_hash                                       String
+  durability                                       durability_tier
+  created_at                                       DateTime        @default(now()) @db.Timestamptz(6)
+  checkpoints                                      checkpoints?    @relation("checkpointsTocheckpoints", fields: [parent_checkpoint_id], references: [id], onUpdate: NoAction)
+  other_checkpoints                                checkpoints[]   @relation("checkpointsTocheckpoints")
+  runs_checkpoints_run_idToruns                    runs            @relation("checkpoints_run_idToruns", fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  artifacts                                        artifacts?      @relation(fields: [state_artifact_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "checkpoints_state_artifact_fk")
+  runs_runs_forked_from_checkpoint_idTocheckpoints runs[]          @relation("runs_forked_from_checkpoint_idTocheckpoints")
+  runs_runs_last_checkpoint_idTocheckpoints        runs[]          @relation("runs_last_checkpoint_idTocheckpoints")
+  steps                                            steps[]
+
+  @@unique([run_id, step_seq, created_at])
+  @@index([run_id, step_seq(sort: Desc)], map: "checkpoints_run_idx")
+}
+
+model credential_grants {
+  id                                                                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                                                             String             @db.Uuid
+  run_id                                                             String             @db.Uuid
+  step_id                                                            String?            @db.Uuid
+  workload_identity_id                                               String             @db.Uuid
+  on_behalf_of_principal_id                                          String?            @db.Uuid
+  audience                                                           String
+  scopes                                                             String[]
+  tenant_ref                                                         String?
+  token_id                                                           String             @unique
+  issued_at                                                          DateTime           @default(now()) @db.Timestamptz(6)
+  expires_at                                                         DateTime           @db.Timestamptz(6)
+  revoked_at                                                         DateTime?          @db.Timestamptz(6)
+  principals_credential_grants_on_behalf_of_principal_idToprincipals principals?        @relation("credential_grants_on_behalf_of_principal_idToprincipals", fields: [on_behalf_of_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  orgs                                                               orgs               @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs                                                               runs               @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "credential_grants_run_fk")
+  principals_credential_grants_workload_identity_idToprincipals      principals         @relation("credential_grants_workload_identity_idToprincipals", fields: [workload_identity_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tool_invocations                                                   tool_invocations[]
+}
+
+model dead_letters {
+  id                                      String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id                                  String      @db.Uuid
+  step_id                                 String?     @db.Uuid
+  reason                                  String
+  error                                   Json
+  attempts                                Int
+  last_worker                             String?
+  created_at                              DateTime    @default(now()) @db.Timestamptz(6)
+  acknowledged_by                         String?     @db.Uuid
+  acknowledged_at                         DateTime?   @db.Timestamptz(6)
+  replayed_run_id                         String?     @db.Uuid
+  principals                              principals? @relation(fields: [acknowledged_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  runs_dead_letters_replayed_run_idToruns runs?       @relation("dead_letters_replayed_run_idToruns", fields: [replayed_run_id], references: [id], onUpdate: NoAction)
+  runs_dead_letters_run_idToruns          runs        @relation("dead_letters_run_idToruns", fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  steps                                   steps?      @relation(fields: [step_id], references: [id], onUpdate: NoAction)
+
+  @@index([created_at(sort: Desc)], map: "dead_letters_open_idx", where: raw("(acknowledged_at IS NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model deployments {
+  id                                                                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agent_id                                                          String          @db.Uuid
+  environment                                                       environment
+  agent_version_id                                                  String          @db.Uuid
+  canary_percent                                                    Int             @default(100) @db.SmallInt
+  shadow_from_version_id                                            String?         @db.Uuid
+  promotion_eval_run_id                                             String?         @db.Uuid
+  state                                                             String          @default("active")
+  promoted_by                                                       String?         @db.Uuid
+  promoted_at                                                       DateTime?       @db.Timestamptz(6)
+  created_at                                                        DateTime        @default(now()) @db.Timestamptz(6)
+  gate_overridden_by                                                String?         @db.Uuid
+  gate_override_reason                                              String?
+  agents                                                            agents          @relation(fields: [agent_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agent_versions_deployments_agent_version_idToagent_versions       agent_versions  @relation("deployments_agent_version_idToagent_versions", fields: [agent_version_id], references: [id], onUpdate: NoAction)
+  eval_runs                                                         eval_runs?      @relation(fields: [promotion_eval_run_id], references: [id], onUpdate: NoAction, map: "deployments_eval_run_fk")
+  principals_deployments_gate_overridden_byToprincipals             principals?     @relation("deployments_gate_overridden_byToprincipals", fields: [gate_overridden_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  principals                                                        principals?     @relation(fields: [promoted_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  agent_versions_deployments_shadow_from_version_idToagent_versions agent_versions? @relation("deployments_shadow_from_version_idToagent_versions", fields: [shadow_from_version_id], references: [id], onUpdate: NoAction)
+
+  @@unique([agent_id, environment], map: "deployments_active_uq", where: raw("(state = 'active'::text)"))
+  @@unique([agent_id, environment, agent_version_id], map: "deployments_live_version_uq", where: raw("(state = ANY (ARRAY['active'::text, 'rolling'::text]))"))
+  @@unique([agent_id, environment], map: "deployments_rolling_uq", where: raw("(state = 'rolling'::text)"))
+}
+
+model eval_case_results {
+  eval_run_id  String     @db.Uuid
+  eval_case_id String     @db.Uuid
+  run_id       String?    @db.Uuid
+  score        Decimal?   @db.Decimal(6, 4)
+  passed       Boolean
+  detail       Json?
+  eval_cases   eval_cases @relation(fields: [eval_case_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  eval_runs    eval_runs  @relation(fields: [eval_run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs         runs?      @relation(fields: [run_id], references: [id], onUpdate: NoAction)
+
+  @@id([eval_run_id, eval_case_id])
+}
+
+model eval_cases {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eval_suite_id     String              @db.Uuid
+  name              String
+  input             Json
+  expectation       Json
+  weight            Float               @default(1) @db.Real
+  grader            String              @default("contains")
+  ab_comparable     Boolean             @default(true)
+  eval_case_results eval_case_results[]
+  eval_suites       eval_suites         @relation(fields: [eval_suite_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([eval_suite_id, name])
+}
+
+model eval_runs {
+  id                                                           String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eval_suite_id                                                String              @db.Uuid
+  agent_version_id                                             String              @db.Uuid
+  mechanism_enabled                                            Boolean?
+  score                                                        Decimal?            @db.Decimal(6, 4)
+  passed                                                       Boolean?
+  min_score                                                    Decimal?            @db.Decimal(6, 4)
+  started_at                                                   DateTime            @default(now()) @db.Timestamptz(6)
+  ended_at                                                     DateTime?           @db.Timestamptz(6)
+  baseline_eval_run_id                                         String?             @db.Uuid
+  executed_version_id                                          String?             @db.Uuid
+  cases_total                                                  Int                 @default(0)
+  cases_passed                                                 Int                 @default(0)
+  cases_errored                                                Int                 @default(0)
+  p50_latency_ms                                               Int?
+  total_cost_micros                                            BigInt              @default(0)
+  verdict                                                      String?
+  deployments                                                  deployments[]
+  eval_case_results                                            eval_case_results[]
+  agent_versions                                               agent_versions      @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  eval_runs                                                    eval_runs?          @relation("eval_runsToeval_runs", fields: [baseline_eval_run_id], references: [id], onUpdate: NoAction)
+  other_eval_runs                                              eval_runs[]         @relation("eval_runsToeval_runs")
+  eval_suites                                                  eval_suites         @relation(fields: [eval_suite_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agent_versions_eval_runs_executed_version_idToagent_versions agent_versions?     @relation("eval_runs_executed_version_idToagent_versions", fields: [executed_version_id], references: [id], onUpdate: NoAction)
+
+  @@index([agent_version_id, started_at(sort: Desc)], map: "eval_runs_version_idx")
+  @@index([eval_suite_id, agent_version_id, started_at(sort: Desc)], map: "eval_runs_suite_version_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model eval_suites {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id               String            @db.Uuid
+  namespace_id         String            @db.Uuid
+  ref                  String            @db.Citext
+  description          String?
+  mechanism_under_test String?
+  created_at           DateTime          @default(now()) @db.Timestamptz(6)
+  min_score            Decimal           @default(0.7) @db.Decimal(6, 4)
+  min_mechanism_delta  Decimal           @default(0.05) @db.Decimal(6, 4)
+  eval_cases           eval_cases[]
+  eval_runs            eval_runs[]
+  namespaces           namespaces        @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                 orgs              @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  promotion_gates      promotion_gates[]
+
+  @@unique([org_id, ref])
+}
+
+model event_schema_versions {
+  event_type     String
+  schema_version Int
+  json_schema    Json
+  upcaster_ref   String?
+  introduced_at  DateTime  @default(now()) @db.Timestamptz(6)
+  retired_at     DateTime? @db.Timestamptz(6)
+
+  @@id([event_type, schema_version])
+}
+
+/// This table is a partition table and requires additional setup for migrations. Visit https://pris.ly/d/partition-tables for more info.
+model events {
+  id                String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id            String   @db.Uuid
+  seq               BigInt
+  occurred_at       DateTime @default(now()) @db.Timestamptz(6)
+  schema_version    Int
+  event_type        String
+  thread_id         String   @db.Uuid
+  parent_run_id     String?  @db.Uuid
+  step_id           String?  @db.Uuid
+  agent_version_id  String   @db.Uuid
+  org_id            String   @db.Uuid
+  namespace_id      String   @db.Uuid
+  tenant_ref        String
+  trace_id          String?
+  span_id           String?
+  causation_id      String?
+  correlation_id    String?
+  principal_id      String?  @db.Uuid
+  delegation_chain  Json     @default("[]")
+  protocol_metadata Json     @default("{}")
+  payload           Json
+
+  @@id([run_id, seq, occurred_at])
+  @@index([causation_id], map: "events_causation_idx", where: raw("(causation_id IS NOT NULL)"))
+  @@index([run_id, seq], map: "events_run_seq_idx")
+  @@index([org_id, namespace_id, tenant_ref, occurred_at(sort: Desc)], map: "events_tenant_idx")
+  @@index([trace_id], map: "events_trace_idx", where: raw("(trace_id IS NOT NULL)"))
+  @@index([event_type, occurred_at(sort: Desc)], map: "events_type_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model feedback {
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id           String         @db.Uuid
+  namespace_id     String         @db.Uuid
+  tenant_ref       String
+  run_id           String?        @db.Uuid
+  thread_id        String?        @db.Uuid
+  interaction_id   String?        @db.Uuid
+  agent_version_id String         @db.Uuid
+  principal_id     String?        @db.Uuid
+  rating           Int?           @db.SmallInt
+  label            String?
+  comment          String?
+  correction       Json?
+  created_at       DateTime       @default(now()) @db.Timestamptz(6)
+  agent_versions   agent_versions @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  interactions     interactions?  @relation(fields: [interaction_id], references: [id], onUpdate: NoAction)
+  namespaces       namespaces     @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs             orgs           @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  principals       principals?    @relation(fields: [principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  runs             runs?          @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  threads          threads?       @relation(fields: [thread_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([agent_version_id, created_at(sort: Desc)], map: "feedback_version_idx")
+  @@index([thread_id], map: "feedback_thread_idx", where: raw("(thread_id IS NOT NULL)"))
+  @@index([agent_version_id, created_at(sort: Desc)], map: "feedback_version_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model interactions {
+  id                                                           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id                                                       String             @db.Uuid
+  thread_id                                                    String             @db.Uuid
+  step_id                                                      String?            @db.Uuid
+  org_id                                                       String             @db.Uuid
+  namespace_id                                                 String             @db.Uuid
+  tenant_ref                                                   String
+  kind                                                         interaction_kind
+  status                                                       interaction_status @default(pending)
+  prompt                                                       Json
+  response_schema                                              Json?
+  originating_run_id                                           String?            @db.Uuid
+  originating_principal_id                                     String?            @db.Uuid
+  delegation_chain                                             Json               @default("[]")
+  required_authorization                                       Json               @default("{}")
+  responder_principal_id                                       String?            @db.Uuid
+  response                                                     Json?
+  expires_at                                                   DateTime           @db.Timestamptz(6)
+  created_at                                                   DateTime           @default(now()) @db.Timestamptz(6)
+  resolved_at                                                  DateTime?          @db.Timestamptz(6)
+  feedback                                                     feedback[]
+  namespaces                                                   namespaces         @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                                                         orgs               @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  principals_interactions_originating_principal_idToprincipals principals?        @relation("interactions_originating_principal_idToprincipals", fields: [originating_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  runs_interactions_originating_run_idToruns                   runs?              @relation("interactions_originating_run_idToruns", fields: [originating_run_id], references: [id], onUpdate: NoAction)
+  principals_interactions_responder_principal_idToprincipals   principals?        @relation("interactions_responder_principal_idToprincipals", fields: [responder_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  runs_interactions_run_idToruns                               runs               @relation("interactions_run_idToruns", fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  steps                                                        steps?             @relation(fields: [step_id], references: [id], onUpdate: NoAction)
+  threads                                                      threads            @relation(fields: [thread_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tool_invocations                                             tool_invocations[]
+
+  @@index([expires_at], map: "interactions_pending_idx", where: raw("(status = 'pending'::interaction_status)"))
+  @@index([run_id, created_at(sort: Desc)], map: "interactions_run_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model lineage_edges {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id       String            @db.Uuid
+  tenant_ref   String
+  derived_kind lineage_node_kind
+  derived_id   String            @db.Uuid
+  source_kind  lineage_node_kind
+  source_id    String            @db.Uuid
+  relation     String
+  run_id       String?           @db.Uuid
+  observed_at  DateTime          @default(now()) @db.Timestamptz(6)
+  orgs         orgs              @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs         runs?             @relation(fields: [run_id], references: [id], onUpdate: NoAction)
+
+  @@unique([derived_kind, derived_id, source_kind, source_id, relation])
+  @@index([source_kind, source_id], map: "lineage_backward_idx")
+  @@index([derived_kind, derived_id], map: "lineage_forward_idx")
+}
+
+model mcp_server_approvals {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mcp_server_id String      @db.Uuid
+  namespace_id  String      @db.Uuid
+  tenant_ref    String?
+  approved_by   String      @db.Uuid
+  approved_at   DateTime    @default(now()) @db.Timestamptz(6)
+  revoked_at    DateTime?   @db.Timestamptz(6)
+  principals    principals  @relation(fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  mcp_servers   mcp_servers @relation(fields: [mcp_server_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  namespaces    namespaces  @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([mcp_server_id, namespace_id, tenant_ref])
+}
+
+model mcp_server_tools {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mcp_server_id   String      @db.Uuid
+  tool_name       String
+  definition_hash String
+  definition      Json
+  first_seen_at   DateTime    @default(now()) @db.Timestamptz(6)
+  approved_by     String?     @db.Uuid
+  approved_at     DateTime?   @db.Timestamptz(6)
+  superseded_at   DateTime?   @db.Timestamptz(6)
+  principals      principals? @relation(fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  mcp_servers     mcp_servers @relation(fields: [mcp_server_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([mcp_server_id, tool_name, definition_hash])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model mcp_servers {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                    String                      @db.Uuid
+  namespace_id              String                      @db.Uuid
+  name                      String                      @db.Citext
+  mcp_transport             mcp_transport
+  endpoint_url              String?
+  command                   String[]
+  protocol_revision         String
+  residency                 residency
+  allow_sampling            Boolean                     @default(false)
+  rate_limit_qps            Int?
+  status                    registry_status             @default(active)
+  created_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  agent_version_mcp_servers agent_version_mcp_servers[]
+  mcp_server_approvals      mcp_server_approvals[]
+  mcp_server_tools          mcp_server_tools[]
+  namespaces                namespaces                  @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs                      orgs                        @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  tools                     tools[]
+
+  @@unique([org_id, name])
+}
+
+model memory_embeddings {
+  memory_id      String                @db.Uuid
+  model_id       String
+  dimensions     Int                   @db.SmallInt
+  embedding      Unsupported("vector")
+  created_at     DateTime              @default(now()) @db.Timestamptz(6)
+  memory_records memory_records        @relation(fields: [memory_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([memory_id, model_id])
+  @@index([embedding], map: "memory_embeddings_ann_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model memory_records {
+  id                                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                                  String                   @db.Uuid
+  namespace_id                            String                   @db.Uuid
+  tenant_ref                              String
+  tier                                    memory_tier
+  scope                                   memory_scope
+  scope_user_id                           String?                  @db.Uuid
+  scope_agent_id                          String?                  @db.Uuid
+  scope_thread_id                         String?                  @db.Uuid
+  scope_run_id                            String?                  @db.Uuid
+  content                                 String?
+  structured                              Json?
+  artifact_id                             String?                  @db.Uuid
+  provenance                              memory_provenance
+  source_run_id                           String?                  @db.Uuid
+  source_step_id                          String?                  @db.Uuid
+  source_peer_id                          String?                  @db.Uuid
+  trusted                                 Boolean                  @default(false)
+  delivered                               Boolean?
+  played_offset_ms                        Int?
+  salience                                Float                    @default(0) @db.Real
+  access_count                            Int                      @default(0)
+  last_accessed_at                        DateTime?                @db.Timestamptz(6)
+  consolidated_from                       String[]                 @default([]) @db.Uuid
+  superseded_by                           String?                  @db.Uuid
+  expires_at                              DateTime?                @db.Timestamptz(6)
+  created_at                              DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at                              DateTime                 @default(now()) @db.Timestamptz(6)
+  shared                                  Boolean                  @default(false)
+  sharing_policy_id                       String?                  @db.Uuid
+  source_tenant_ref                       String?
+  memory_embeddings                       memory_embeddings[]
+  artifacts                               artifacts?               @relation(fields: [artifact_id], references: [id], onUpdate: NoAction)
+  namespaces                              namespaces               @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                                    orgs                     @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agents                                  agents?                  @relation(fields: [scope_agent_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs_memory_records_scope_run_idToruns  runs?                    @relation("memory_records_scope_run_idToruns", fields: [scope_run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  threads                                 threads?                 @relation(fields: [scope_thread_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  principals                              principals?              @relation(fields: [scope_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  memory_sharing_policies                 memory_sharing_policies? @relation(fields: [sharing_policy_id], references: [id], onUpdate: NoAction)
+  peers                                   peers?                   @relation(fields: [source_peer_id], references: [id], onUpdate: NoAction)
+  runs_memory_records_source_run_idToruns runs?                    @relation("memory_records_source_run_idToruns", fields: [source_run_id], references: [id], onUpdate: NoAction)
+  steps                                   steps?                   @relation(fields: [source_step_id], references: [id], onUpdate: NoAction)
+  memory_records                          memory_records?          @relation("memory_recordsTomemory_records", fields: [superseded_by], references: [id], onUpdate: NoAction)
+  other_memory_records                    memory_records[]         @relation("memory_recordsTomemory_records")
+
+  @@index([expires_at], map: "memory_expiry_idx", where: raw("(expires_at IS NOT NULL)"))
+  @@index([org_id, namespace_id, tenant_ref, scope, tier], map: "memory_scope_idx", where: raw("(superseded_by IS NULL)"))
+  @@index([scope_thread_id, created_at], map: "memory_thread_idx", where: raw("(scope_thread_id IS NOT NULL)"))
+  @@index([scope_agent_id, tier, created_at(sort: Desc)], map: "memory_agent_idx", where: raw("(scope_agent_id IS NOT NULL)"))
+  @@index([org_id, namespace_id, tier], map: "memory_shared_idx", where: raw("((shared = true) AND (superseded_by IS NULL))"))
+}
+
+model models {
+  id                                         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                                     String           @db.Uuid
+  ref                                        String           @db.Citext
+  provider                                   String
+  provider_model_id                          String
+  residency                                  residency
+  region                                     String?
+  capabilities                               Json             @default("{}")
+  context_window_tokens                      Int?
+  max_output_tokens                          Int?
+  input_cost_micros_per_1k                   BigInt?
+  output_cost_micros_per_1k                  BigInt?
+  fallback_model_id                          String?          @db.Uuid
+  status                                     registry_status  @default(active)
+  created_at                                 DateTime         @default(now()) @db.Timestamptz(6)
+  base_url                                   String?
+  credential_ref                             String?
+  agent_versions                             agent_versions[]
+  models                                     models?          @relation("modelsTomodels", fields: [fallback_model_id], references: [id], onUpdate: NoAction)
+  other_models                               models[]         @relation("modelsTomodels")
+  orgs                                       orgs             @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  steps_steps_fallback_from_model_idTomodels steps[]          @relation("steps_fallback_from_model_idTomodels")
+  steps_steps_model_idTomodels               steps[]          @relation("steps_model_idTomodels")
+
+  @@unique([org_id, ref])
+}
+
+model namespaces {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                  String                    @db.Uuid
+  slug                    String                    @db.Citext
+  owning_team             String
+  owner_contact           String
+  created_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  admission_decisions     admission_decisions[]
+  agent_versions          agent_versions[]
+  agents                  agents[]
+  artifacts               artifacts[]
+  capability_grants       capability_grants[]
+  eval_suites             eval_suites[]
+  feedback                feedback[]
+  interactions            interactions[]
+  knowledge_collections   knowledge_collections[]
+  mcp_server_approvals    mcp_server_approvals[]
+  mcp_servers             mcp_servers[]
+  memory_records          memory_records[]
+  memory_sharing_policies memory_sharing_policies[]
+  orgs                    orgs                      @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  peers                   peers[]
+  prompts                 prompts[]
+  runs                    runs[]
+  skill_versions          skill_versions[]
+  skills                  skills[]
+  steps                   steps[]
+  tenants                 tenants[]
+  threads                 threads[]
+  tool_invocations        tool_invocations[]
+  tools                   tools[]
+
+  @@unique([id, org_id])
+  @@unique([org_id, slug])
+}
+
+model orgs {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                    String                    @unique @db.Citext
+  name                    String
+  created_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  a2a_push_configs        a2a_push_configs[]
+  admission_decisions     admission_decisions[]
+  agent_versions          agent_versions[]
+  agents                  agents[]
+  artifacts               artifacts[]
+  backpressure_policies   backpressure_policies[]
+  budgets                 budgets[]
+  capability_grants       capability_grants[]
+  credential_grants       credential_grants[]
+  eval_suites             eval_suites[]
+  feedback                feedback[]
+  interactions            interactions[]
+  knowledge_collections   knowledge_collections[]
+  knowledge_documents     knowledge_documents[]
+  lineage_edges           lineage_edges[]
+  mcp_servers             mcp_servers[]
+  memory_records          memory_records[]
+  memory_sharing_policies memory_sharing_policies[]
+  models                  models[]
+  namespaces              namespaces[]
+  peer_tasks              peer_tasks[]
+  peers                   peers[]
+  policies                policies[]
+  principals              principals[]
+  promotion_gates         promotion_gates[]
+  prompts                 prompts[]
+  runs                    runs[]
+  skill_versions          skill_versions[]
+  skills                  skills[]
+  speech_providers        speech_providers[]
+  steps                   steps[]
+  tenants                 tenants[]
+  threads                 threads[]
+  tool_invocations        tool_invocations[]
+  tools                   tools[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model outbox {
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id             String            @db.Uuid
+  step_id            String?           @db.Uuid
+  tool_invocation_id String?           @db.Uuid
+  destination        String
+  idempotency_key    String
+  payload            Json
+  status             String            @default("pending")
+  attempts           Int               @default(0)
+  next_attempt_at    DateTime          @default(now()) @db.Timestamptz(6)
+  last_error         Json?
+  sent_at            DateTime?         @db.Timestamptz(6)
+  created_at         DateTime          @default(now()) @db.Timestamptz(6)
+  runs               runs              @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  steps              steps?            @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tool_invocations   tool_invocations? @relation(fields: [tool_invocation_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([destination, idempotency_key])
+  @@index([next_attempt_at], map: "outbox_pending_idx", where: raw("(status = 'pending'::text)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model peers {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id              String                @db.Uuid
+  namespace_id        String                @db.Uuid
+  name                String                @db.Citext
+  binding             peer_binding
+  local_agent_id      String?               @db.Uuid
+  endpoint_url        String?
+  protocol_version    String
+  residency           residency
+  agent_card          Json?
+  card_signature      String?
+  card_verified_at    DateTime?             @db.Timestamptz(6)
+  status              registry_status       @default(active)
+  created_at          DateTime              @default(now()) @db.Timestamptz(6)
+  failure_mode        String                @default("contain")
+  timeout_ms          Int                   @default(300000)
+  public_key          String?
+  card_fetched_at     DateTime?             @db.Timestamptz(6)
+  inbound_trust       String                @default("self")
+  agent_version_peers agent_version_peers[]
+  memory_records      memory_records[]
+  peer_tasks          peer_tasks[]
+  agents              agents?               @relation(fields: [local_agent_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "peers_local_agent_fk")
+  namespaces          namespaces            @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs                orgs                  @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+
+  @@unique([org_id, name])
+}
+
+model policies {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id          String            @db.Uuid
+  ref             String            @db.Citext
+  owner           String
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  orgs            orgs              @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  policy_versions policy_versions[]
+
+  @@unique([org_id, ref])
+}
+
+model policy_versions {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  policy_id      String           @db.Uuid
+  version        Int
+  document       Json
+  content_hash   String
+  approved_by    String?          @db.Uuid
+  approved_at    DateTime?        @db.Timestamptz(6)
+  created_at     DateTime         @default(now()) @db.Timestamptz(6)
+  agent_versions agent_versions[]
+  principals     principals?      @relation(fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  policies       policies         @relation(fields: [policy_id], references: [id], onUpdate: NoAction)
+
+  @@unique([policy_id, version])
+}
+
+model principals {
+  id                                                                        String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                                                                    String                    @db.Uuid
+  kind                                                                      principal_kind
+  subject                                                                   String
+  display_name                                                              String?
+  disabled_at                                                               DateTime?                 @db.Timestamptz(6)
+  created_at                                                                DateTime                  @default(now()) @db.Timestamptz(6)
+  admission_decisions                                                       admission_decisions[]
+  agent_versions_agent_versions_created_byToprincipals                      agent_versions[]          @relation("agent_versions_created_byToprincipals")
+  agent_versions_agent_versions_workload_identity_idToprincipals            agent_versions[]          @relation("agent_versions_workload_identity_idToprincipals")
+  capability_grants_capability_grants_granted_byToprincipals                capability_grants[]       @relation("capability_grants_granted_byToprincipals")
+  capability_grants_capability_grants_grantee_principal_idToprincipals      capability_grants[]       @relation("capability_grants_grantee_principal_idToprincipals")
+  credential_grants_credential_grants_on_behalf_of_principal_idToprincipals credential_grants[]       @relation("credential_grants_on_behalf_of_principal_idToprincipals")
+  credential_grants_credential_grants_workload_identity_idToprincipals      credential_grants[]       @relation("credential_grants_workload_identity_idToprincipals")
+  dead_letters                                                              dead_letters[]
+  deployments_deployments_gate_overridden_byToprincipals                    deployments[]             @relation("deployments_gate_overridden_byToprincipals")
+  deployments                                                               deployments[]
+  feedback                                                                  feedback[]
+  interactions_interactions_originating_principal_idToprincipals            interactions[]            @relation("interactions_originating_principal_idToprincipals")
+  interactions_interactions_responder_principal_idToprincipals              interactions[]            @relation("interactions_responder_principal_idToprincipals")
+  knowledge_collections                                                     knowledge_collections[]
+  mcp_server_approvals                                                      mcp_server_approvals[]
+  mcp_server_tools                                                          mcp_server_tools[]
+  memory_records                                                            memory_records[]
+  memory_sharing_policies                                                   memory_sharing_policies[]
+  policy_versions                                                           policy_versions[]
+  orgs                                                                      orgs                      @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  prompt_versions                                                           prompt_versions[]
+  runs_runs_authorizing_human_idToprincipals                                runs[]                    @relation("runs_authorizing_human_idToprincipals")
+  runs_runs_caller_principal_idToprincipals                                 runs[]                    @relation("runs_caller_principal_idToprincipals")
+  runs_runs_on_behalf_of_principal_idToprincipals                           runs[]                    @relation("runs_on_behalf_of_principal_idToprincipals")
+  skill_versions                                                            skill_versions[]
+  skills                                                                    skills[]
+  threads                                                                   threads[]
+  tool_invocations                                                          tool_invocations[]
+
+  @@unique([org_id, kind, subject])
+}
+
+model prompt_versions {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prompt_id      String           @db.Uuid
+  version        Int
+  body           String
+  content_hash   String
+  approved_by    String?          @db.Uuid
+  approved_at    DateTime?        @db.Timestamptz(6)
+  created_at     DateTime         @default(now()) @db.Timestamptz(6)
+  agent_versions agent_versions[]
+  principals     principals?      @relation(fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  prompts        prompts          @relation(fields: [prompt_id], references: [id], onUpdate: NoAction)
+  steps          steps[]
+
+  @@unique([prompt_id, content_hash])
+  @@unique([prompt_id, version])
+}
+
+model prompts {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id          String            @db.Uuid
+  namespace_id    String            @db.Uuid
+  ref             String            @db.Citext
+  owner           String
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  prompt_versions prompt_versions[]
+  namespaces      namespaces        @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs            orgs              @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+
+  @@unique([org_id, ref])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model run_queue {
+  run_id           String    @id @db.Uuid
+  worker_pool      String    @default("default")
+  priority         Int       @default(100) @db.SmallInt
+  visible_at       DateTime  @default(now()) @db.Timestamptz(6)
+  attempts         Int       @default(0)
+  lease_owner      String?
+  lease_epoch      BigInt    @default(0)
+  lease_expires_at DateTime? @db.Timestamptz(6)
+  heartbeat_at     DateTime? @db.Timestamptz(6)
+  enqueued_at      DateTime  @default(now()) @db.Timestamptz(6)
+  runs             runs      @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([worker_pool, priority, visible_at], map: "run_queue_claimable_idx", where: raw("(lease_owner IS NULL)"))
+  @@index([lease_expires_at], map: "run_queue_expired_lease_idx", where: raw("(lease_owner IS NOT NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model runs {
+  id                                                      String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  thread_id                                               String              @db.Uuid
+  agent_version_id                                        String              @db.Uuid
+  org_id                                                  String              @db.Uuid
+  namespace_id                                            String              @db.Uuid
+  tenant_ref                                              String
+  tenant_id                                               String?             @db.Uuid
+  status                                                  run_status          @default(queued)
+  durability                                              durability_tier
+  initiator                                               run_initiator
+  trigger_id                                              String?             @db.Uuid
+  parent_run_id                                           String?             @db.Uuid
+  root_run_id                                             String?             @db.Uuid
+  delegation_depth                                        Int                 @default(0) @db.SmallInt
+  delegation_chain                                        Json                @default("[]")
+  caller_principal_id                                     String              @db.Uuid
+  on_behalf_of_principal_id                               String?             @db.Uuid
+  authorizing_human_id                                    String?             @db.Uuid
+  idempotency_key                                         String?
+  attempt                                                 Int                 @default(1)
+  input                                                   Json?
+  input_artifact_id                                       String?             @db.Uuid
+  output                                                  Json?
+  output_artifact_id                                      String?             @db.Uuid
+  error                                                   Json?
+  trace_id                                                String?
+  correlation_id                                          String?
+  causation_id                                            String?
+  last_event_seq                                          BigInt              @default(0)
+  last_checkpoint_id                                      String?             @db.Uuid
+  forked_from_checkpoint_id                               String?             @db.Uuid
+  max_cost_micros                                         BigInt?
+  cost_micros                                             BigInt              @default(0)
+  input_tokens                                            BigInt              @default(0)
+  output_tokens                                           BigInt              @default(0)
+  step_count                                              Int                 @default(0)
+  deadline_at                                             DateTime?           @db.Timestamptz(6)
+  queued_at                                               DateTime            @default(now()) @db.Timestamptz(6)
+  started_at                                              DateTime?           @db.Timestamptz(6)
+  ended_at                                                DateTime?           @db.Timestamptz(6)
+  created_at                                              DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                                              DateTime            @default(now()) @db.Timestamptz(6)
+  delivery                                                Json?
+  a2a_push_configs                                        a2a_push_configs?
+  artifacts_artifacts_produced_by_run_idToruns            artifacts[]         @relation("artifacts_produced_by_run_idToruns")
+  checkpoints_checkpoints_run_idToruns                    checkpoints[]       @relation("checkpoints_run_idToruns")
+  credential_grants                                       credential_grants[]
+  dead_letters_dead_letters_replayed_run_idToruns         dead_letters[]      @relation("dead_letters_replayed_run_idToruns")
+  dead_letters_dead_letters_run_idToruns                  dead_letters[]      @relation("dead_letters_run_idToruns")
+  eval_case_results                                       eval_case_results[]
+  feedback                                                feedback[]
+  interactions_interactions_originating_run_idToruns      interactions[]      @relation("interactions_originating_run_idToruns")
+  interactions_interactions_run_idToruns                  interactions[]      @relation("interactions_run_idToruns")
+  lineage_edges                                           lineage_edges[]
+  memory_records_memory_records_scope_run_idToruns        memory_records[]    @relation("memory_records_scope_run_idToruns")
+  memory_records_memory_records_source_run_idToruns       memory_records[]    @relation("memory_records_source_run_idToruns")
+  outbox                                                  outbox[]
+  peer_tasks_peer_tasks_child_run_idToruns                peer_tasks[]        @relation("peer_tasks_child_run_idToruns")
+  peer_tasks_peer_tasks_run_idToruns                      peer_tasks[]        @relation("peer_tasks_run_idToruns")
+  run_queue                                               run_queue?
+  agent_versions                                          agent_versions      @relation(fields: [agent_version_id], references: [id], onUpdate: NoAction)
+  principals_runs_authorizing_human_idToprincipals        principals?         @relation("runs_authorizing_human_idToprincipals", fields: [authorizing_human_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  principals_runs_caller_principal_idToprincipals         principals          @relation("runs_caller_principal_idToprincipals", fields: [caller_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  checkpoints_runs_forked_from_checkpoint_idTocheckpoints checkpoints?        @relation("runs_forked_from_checkpoint_idTocheckpoints", fields: [forked_from_checkpoint_id], references: [id], onUpdate: NoAction, map: "runs_forked_from_fk")
+  artifacts_runs_input_artifact_idToartifacts             artifacts?          @relation("runs_input_artifact_idToartifacts", fields: [input_artifact_id], references: [id], onUpdate: NoAction, map: "runs_input_artifact_fk")
+  checkpoints_runs_last_checkpoint_idTocheckpoints        checkpoints?        @relation("runs_last_checkpoint_idTocheckpoints", fields: [last_checkpoint_id], references: [id], onUpdate: NoAction, map: "runs_last_checkpoint_fk")
+  namespaces                                              namespaces          @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  principals_runs_on_behalf_of_principal_idToprincipals   principals?         @relation("runs_on_behalf_of_principal_idToprincipals", fields: [on_behalf_of_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  orgs                                                    orgs                @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  artifacts_runs_output_artifact_idToartifacts            artifacts?          @relation("runs_output_artifact_idToartifacts", fields: [output_artifact_id], references: [id], onUpdate: NoAction, map: "runs_output_artifact_fk")
+  runs_runs_parent_run_idToruns                           runs?               @relation("runs_parent_run_idToruns", fields: [parent_run_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_runs_runs_parent_run_idToruns                     runs[]              @relation("runs_parent_run_idToruns")
+  runs_runs_root_run_idToruns                             runs?               @relation("runs_root_run_idToruns", fields: [root_run_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_runs_runs_root_run_idToruns                       runs[]              @relation("runs_root_run_idToruns")
+  tenants                                                 tenants?            @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  threads                                                 threads             @relation(fields: [thread_id], references: [id], onUpdate: NoAction)
+  triggers                                                triggers?           @relation(fields: [trigger_id], references: [id], onUpdate: NoAction)
+  steps                                                   steps[]
+  tool_invocations                                        tool_invocations[]
+
+  @@unique([namespace_id, tenant_ref, idempotency_key], map: "runs_idempotency_uq", where: raw("(idempotency_key IS NOT NULL)"))
+  @@index([status, deadline_at], map: "runs_active_idx", where: raw("(status = ANY (ARRAY['queued'::run_status, 'running'::run_status, 'tool_execution'::run_status, 'waiting'::run_status, 'checkpointed'::run_status]))"))
+  @@index([parent_run_id], map: "runs_parent_idx", where: raw("(parent_run_id IS NOT NULL)"))
+  @@index([org_id, namespace_id, tenant_ref, created_at(sort: Desc)], map: "runs_tenant_idx")
+  @@index([thread_id, created_at(sort: Desc)], map: "runs_thread_idx")
+  @@index([trace_id], map: "runs_trace_idx", where: raw("(trace_id IS NOT NULL)"))
+  @@index([trace_id], map: "runs_trace_lookup_idx", where: raw("(trace_id IS NOT NULL)"))
+  @@index([agent_version_id, status, created_at(sort: Desc)], map: "runs_version_status_idx")
+}
+
+model speech_providers {
+  id                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                  String                 @db.Uuid
+  name                    String                 @db.Citext
+  speech_kind             speech_kind
+  residency               residency
+  region                  String?
+  languages               String[]               @default([])
+  cost_tier               String?
+  max_concurrent_sessions Int?
+  status                  registry_status        @default(active)
+  agent_version_speech    agent_version_speech[]
+  orgs                    orgs                   @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+
+  @@unique([org_id, name, speech_kind])
+}
+
+model steps {
+  id                                             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id                                         String             @db.Uuid
+  seq                                            Int
+  parent_step_id                                 String?            @db.Uuid
+  kind                                           step_kind
+  status                                         step_status        @default(pending)
+  attempt                                        Int                @default(1) @db.SmallInt
+  org_id                                         String             @db.Uuid
+  namespace_id                                   String             @db.Uuid
+  tenant_ref                                     String
+  model_id                                       String?            @db.Uuid
+  fallback_from_model_id                         String?            @db.Uuid
+  prompt_version_id                              String?            @db.Uuid
+  input_tokens                                   Int?
+  output_tokens                                  Int?
+  cached_input_tokens                            Int?
+  cost_micros                                    BigInt?
+  input                                          Json?
+  input_artifact_id                              String?            @db.Uuid
+  output                                         Json?
+  output_artifact_id                             String?            @db.Uuid
+  error                                          Json?
+  checkpoint_id                                  String?            @db.Uuid
+  trace_id                                       String?
+  span_id                                        String?
+  started_at                                     DateTime?          @db.Timestamptz(6)
+  ended_at                                       DateTime?          @db.Timestamptz(6)
+  latency_ms                                     Int?
+  created_at                                     DateTime           @default(now()) @db.Timestamptz(6)
+  artifacts_artifacts_produced_by_step_idTosteps artifacts[]        @relation("artifacts_produced_by_step_idTosteps")
+  dead_letters                                   dead_letters[]
+  interactions                                   interactions[]
+  memory_records                                 memory_records[]
+  outbox                                         outbox[]
+  peer_tasks                                     peer_tasks?
+  checkpoints                                    checkpoints?       @relation(fields: [checkpoint_id], references: [id], onUpdate: NoAction, map: "steps_checkpoint_fk")
+  models_steps_fallback_from_model_idTomodels    models?            @relation("steps_fallback_from_model_idTomodels", fields: [fallback_from_model_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  artifacts_steps_input_artifact_idToartifacts   artifacts?         @relation("steps_input_artifact_idToartifacts", fields: [input_artifact_id], references: [id], onUpdate: NoAction, map: "steps_input_artifact_fk")
+  models_steps_model_idTomodels                  models?            @relation("steps_model_idTomodels", fields: [model_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  namespaces                                     namespaces         @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                                           orgs               @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  artifacts_steps_output_artifact_idToartifacts  artifacts?         @relation("steps_output_artifact_idToartifacts", fields: [output_artifact_id], references: [id], onUpdate: NoAction, map: "steps_output_artifact_fk")
+  steps                                          steps?             @relation("stepsTosteps", fields: [parent_step_id], references: [id], onUpdate: NoAction)
+  other_steps                                    steps[]            @relation("stepsTosteps")
+  prompt_versions                                prompt_versions?   @relation(fields: [prompt_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  runs                                           runs               @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tool_invocations                               tool_invocations[]
+
+  @@unique([run_id, seq])
+  @@index([run_id, seq], map: "steps_run_idx")
+  @@index([status], where: raw("(status = ANY (ARRAY['pending'::step_status, 'running'::step_status]))"))
+  @@index([run_id, kind, latency_ms, status], map: "steps_kind_latency_idx")
+}
+
+model tenants {
+  id               String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id           String     @db.Uuid
+  namespace_id     String     @db.Uuid
+  tenant_ref       String
+  display_name     String?
+  data_class       data_class @default(internal)
+  residency_region String?
+  created_at       DateTime   @default(now()) @db.Timestamptz(6)
+  runs             runs[]
+  namespaces       namespaces @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs             orgs       @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  threads          threads[]
+
+  @@unique([namespace_id, tenant_ref])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model threads {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id            String             @db.Uuid
+  namespace_id      String             @db.Uuid
+  tenant_ref        String
+  tenant_id         String?            @db.Uuid
+  agent_id          String?            @db.Uuid
+  user_principal_id String?            @db.Uuid
+  external_ref      String?
+  title             String?
+  status            String             @default("active")
+  metadata          Json               @default("{}")
+  created_at        DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime           @default(now()) @db.Timestamptz(6)
+  archived_at       DateTime?          @db.Timestamptz(6)
+  artifacts         artifacts[]
+  feedback          feedback[]
+  interactions      interactions[]
+  memory_records    memory_records[]
+  runs              runs[]
+  agents            agents?            @relation(fields: [agent_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  namespaces        namespaces         @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs              orgs               @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  tenants           tenants?           @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  principals        principals?        @relation(fields: [user_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tool_invocations  tool_invocations[]
+
+  @@unique([namespace_id, external_ref])
+  @@index([org_id, namespace_id, tenant_ref, updated_at(sort: Desc)], map: "threads_tenant_idx")
+}
+
+model tool_invocations {
+  id                                                         String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  step_id                                                    String             @db.Uuid
+  run_id                                                     String             @db.Uuid
+  thread_id                                                  String             @db.Uuid
+  org_id                                                     String             @db.Uuid
+  namespace_id                                               String             @db.Uuid
+  tenant_ref                                                 String
+  tool_id                                                    String             @db.Uuid
+  origin                                                     tool_origin
+  effects                                                    effect_class[]
+  definition_hash                                            String?
+  tool_version                                               Int
+  idempotency_key                                            String?
+  attempt                                                    Int                @default(1) @db.SmallInt
+  authorized_principal_id                                    String?            @db.Uuid
+  capability_decision                                        Json               @default("{}")
+  credential_grant_id                                        String?            @db.Uuid
+  interaction_id                                             String?            @db.Uuid
+  sandbox_profile                                            String
+  sandbox_instance_id                                        String?
+  request                                                    Json?
+  request_artifact_id                                        String?            @db.Uuid
+  response                                                   Json?
+  response_artifact_id                                       String?            @db.Uuid
+  error                                                      Json?
+  status                                                     step_status        @default(pending)
+  compensates_invocation_id                                  String?            @db.Uuid
+  protocol_metadata                                          Json               @default("{}")
+  started_at                                                 DateTime?          @db.Timestamptz(6)
+  ended_at                                                   DateTime?          @db.Timestamptz(6)
+  latency_ms                                                 Int?
+  created_at                                                 DateTime           @default(now()) @db.Timestamptz(6)
+  outbox                                                     outbox[]
+  artifacts_tool_invocations_request_artifact_idToartifacts  artifacts?         @relation("tool_invocations_request_artifact_idToartifacts", fields: [request_artifact_id], references: [id], onUpdate: NoAction, map: "tool_inv_request_artifact_fk")
+  artifacts_tool_invocations_response_artifact_idToartifacts artifacts?         @relation("tool_invocations_response_artifact_idToartifacts", fields: [response_artifact_id], references: [id], onUpdate: NoAction, map: "tool_inv_response_artifact_fk")
+  principals                                                 principals?        @relation(fields: [authorized_principal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tool_invocations                                           tool_invocations?  @relation("tool_invocationsTotool_invocations", fields: [compensates_invocation_id], references: [id], onUpdate: NoAction)
+  other_tool_invocations                                     tool_invocations[] @relation("tool_invocationsTotool_invocations")
+  credential_grants                                          credential_grants? @relation(fields: [credential_grant_id], references: [id], onUpdate: NoAction)
+  interactions                                               interactions?      @relation(fields: [interaction_id], references: [id], onUpdate: NoAction, map: "tool_invocations_interaction_fk")
+  namespaces                                                 namespaces         @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                                                       orgs               @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs                                                       runs               @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  steps                                                      steps              @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  threads                                                    threads            @relation(fields: [thread_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tools                                                      tools              @relation(fields: [tool_id], references: [id], onUpdate: NoAction)
+
+  @@unique([tool_id, idempotency_key], map: "tool_invocations_idempotency_uq", where: raw("(idempotency_key IS NOT NULL)"))
+  @@index([run_id, created_at], map: "tool_invocations_run_idx")
+  @@index([tool_id, created_at(sort: Desc)], map: "tool_invocations_tool_idx")
+  @@index([tool_id, status, created_at(sort: Desc)], map: "tool_invocations_health_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model tools {
+  id                                                                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                                                              String                @db.Uuid
+  namespace_id                                                        String                @db.Uuid
+  ref                                                                 String                @db.Citext
+  version                                                             Int                   @default(1)
+  origin                                                              tool_origin
+  residency                                                           residency
+  description                                                         String?
+  input_schema                                                        Json
+  output_schema                                                       Json?
+  default_effects                                                     effect_class[]
+  timeout_ms                                                          Int                   @default(30000)
+  max_retries                                                         Int                   @default(0) @db.SmallInt
+  sandbox_profile                                                     String
+  endpoint_url                                                        String?
+  mcp_server_id                                                       String?               @db.Uuid
+  mcp_tool_name                                                       String?
+  definition_hash                                                     String?
+  status                                                              registry_status       @default(active)
+  created_at                                                          DateTime              @default(now()) @db.Timestamptz(6)
+  agent_version_tools_agent_version_tools_compensation_tool_idTotools agent_version_tools[] @relation("agent_version_tools_compensation_tool_idTotools")
+  agent_version_tools_agent_version_tools_tool_idTotools              agent_version_tools[] @relation("agent_version_tools_tool_idTotools")
+  skill_version_tools                                                 skill_version_tools[]
+  tool_invocations                                                    tool_invocations[]
+  mcp_servers                                                         mcp_servers?          @relation(fields: [mcp_server_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  namespaces                                                          namespaces            @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs                                                                orgs                  @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+
+  @@unique([org_id, ref, version])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model triggers {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agent_id          String          @db.Uuid
+  pinned_version_id String?         @db.Uuid
+  trigger_type      trigger_type
+  event_source      String?
+  event_type        String?
+  webhook_path      String?         @unique(map: "triggers_webhook_path_uq", where: raw("(webhook_path IS NOT NULL)"))
+  cron_expression   String?
+  timezone          String          @default("UTC")
+  config            Json            @default("{}")
+  enabled           Boolean         @default(true)
+  created_at        DateTime        @default(now()) @db.Timestamptz(6)
+  tenant_ref        String?
+  runs              runs[]
+  agents            agents          @relation(fields: [agent_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agent_versions    agent_versions? @relation(fields: [pinned_version_id], references: [id], onUpdate: NoAction)
+
+  @@index([event_source, event_type], map: "triggers_event_idx", where: raw("(enabled AND (trigger_type = 'event'::trigger_type))"))
+  @@index([trigger_type, enabled], map: "triggers_schedule_idx", where: raw("((trigger_type = 'schedule'::trigger_type) AND enabled)"))
+}
+
+/// This table is a partition table and requires additional setup for migrations. Visit https://pris.ly/d/partition-tables for more info.
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model usage_ledger {
+  id                  String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  occurred_at         DateTime @default(now()) @db.Timestamptz(6)
+  org_id              String   @db.Uuid
+  namespace_id        String   @db.Uuid
+  tenant_ref          String
+  agent_version_id    String?  @db.Uuid
+  run_id              String?  @db.Uuid
+  step_id             String?  @db.Uuid
+  kind                String
+  model_id            String?  @db.Uuid
+  provider            String?
+  input_tokens        BigInt   @default(0)
+  output_tokens       BigInt   @default(0)
+  cached_input_tokens BigInt   @default(0)
+  quantity            Decimal  @default(0) @db.Decimal(20, 6)
+  cost_micros         BigInt   @default(0)
+
+  @@id([id, occurred_at])
+  @@index([run_id], map: "usage_run_idx")
+  @@index([org_id, namespace_id, tenant_ref, occurred_at(sort: Desc)], map: "usage_tenant_idx")
+}
+
+model memory_sharing_policies {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id           String           @db.Uuid
+  namespace_id     String           @db.Uuid
+  tiers            memory_tier[]
+  redaction_policy String
+  enabled          Boolean          @default(false)
+  approved_by      String           @db.Uuid
+  approved_at      DateTime         @default(now()) @db.Timestamptz(6)
+  revoked_at       DateTime?        @db.Timestamptz(6)
+  memory_records   memory_records[]
+  principals       principals       @relation(fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  namespaces       namespaces       @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs             orgs             @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([org_id, namespace_id])
+}
+
+model schema_migrations {
+  version    String   @id
+  applied_at DateTime @default(now()) @db.Timestamptz(6)
+  checksum   String
+}
+
+model agent_version_collections {
+  agent_version_id      String                @db.Uuid
+  collection_id         String                @db.Uuid
+  namespace_id          String                @db.Uuid
+  agent_versions        agent_versions        @relation(fields: [agent_version_id, namespace_id], references: [id, namespace_id], onDelete: Cascade, onUpdate: NoAction)
+  knowledge_collections knowledge_collections @relation(fields: [collection_id, namespace_id], references: [id, namespace_id], onUpdate: NoAction)
+
+  @@id([agent_version_id, collection_id])
+}
+
+model agent_version_skills {
+  agent_version_id String         @db.Uuid
+  skill_version_id String         @db.Uuid
+  namespace_id     String         @db.Uuid
+  ord              Int
+  agent_versions   agent_versions @relation(fields: [agent_version_id, namespace_id], references: [id, namespace_id], onDelete: Cascade, onUpdate: NoAction)
+  skill_versions   skill_versions @relation(fields: [skill_version_id, namespace_id], references: [id, namespace_id], onUpdate: NoAction)
+
+  @@id([agent_version_id, skill_version_id])
+  @@unique([agent_version_id, ord])
+}
+
+model knowledge_chunks {
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  document_id         String                 @db.Uuid
+  collection_id       String                 @db.Uuid
+  ord                 Int
+  content             String
+  embedding           Unsupported("vector")?
+  created_at          DateTime               @default(now()) @db.Timestamptz(6)
+  knowledge_documents knowledge_documents    @relation(fields: [document_id, collection_id], references: [id, collection_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([document_id, ord])
+  @@index([collection_id], map: "knowledge_chunks_collection_idx")
+  @@index([embedding], map: "knowledge_chunks_vec_idx")
+}
+
+model knowledge_collections {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                    String                      @db.Uuid
+  namespace_id              String                      @db.Uuid
+  name                      String                      @db.Citext
+  description               String?
+  embedder_id               String
+  dimensions                Int
+  status                    registry_status             @default(active)
+  created_by                String?                     @db.Uuid
+  created_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  archived_at               DateTime?                   @db.Timestamptz(6)
+  agent_version_collections agent_version_collections[]
+  principals                principals?                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  namespaces                namespaces                  @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                      orgs                        @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  knowledge_documents       knowledge_documents[]
+  skill_version_collections skill_version_collections[]
+
+  @@unique([id, namespace_id])
+  @@unique([namespace_id, name])
+}
+
+model knowledge_documents {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collection_id         String                @db.Uuid
+  org_id                String                @db.Uuid
+  source_uri            String?
+  title                 String?
+  content_hash          String
+  body                  String
+  metadata              Json                  @default("{}")
+  chunk_count           Int                   @default(0)
+  indexed_at            DateTime?             @db.Timestamptz(6)
+  created_at            DateTime              @default(now()) @db.Timestamptz(6)
+  knowledge_chunks      knowledge_chunks[]
+  knowledge_collections knowledge_collections @relation(fields: [collection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                  orgs                  @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([collection_id, content_hash])
+  @@unique([id, collection_id])
+}
+
+model skill_version_collections {
+  skill_version_id      String                @db.Uuid
+  collection_id         String                @db.Uuid
+  namespace_id          String                @db.Uuid
+  knowledge_collections knowledge_collections @relation(fields: [collection_id, namespace_id], references: [id, namespace_id], onDelete: Cascade, onUpdate: NoAction)
+  skill_versions        skill_versions        @relation(fields: [skill_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([skill_version_id, collection_id])
+}
+
+model skill_version_tools {
+  skill_version_id String         @db.Uuid
+  tool_id          String         @db.Uuid
+  effects          effect_class[]
+  skill_versions   skill_versions @relation(fields: [skill_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tools            tools          @relation(fields: [tool_id], references: [id], onUpdate: NoAction)
+
+  @@id([skill_version_id, tool_id])
+}
+
+model skill_versions {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  skill_id                  String                      @db.Uuid
+  org_id                    String                      @db.Uuid
+  namespace_id              String                      @db.Uuid
+  version                   Int
+  instructions              String
+  when_to_use               String?
+  spec_hash                 String
+  status                    registry_status             @default(active)
+  published_by              String?                     @db.Uuid
+  published_at              DateTime                    @default(now()) @db.Timestamptz(6)
+  agent_version_skills      agent_version_skills[]
+  skill_version_collections skill_version_collections[]
+  skill_version_tools       skill_version_tools[]
+  namespaces                namespaces                  @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                      orgs                        @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  principals                principals?                 @relation(fields: [published_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  skills                    skills                      @relation(fields: [skill_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([id, namespace_id])
+  @@unique([skill_id, version])
+  @@index([skill_id, status, version(sort: Desc)], map: "skill_versions_lookup_idx")
+}
+
+model skills {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id         String           @db.Uuid
+  namespace_id   String           @db.Uuid
+  name           String           @db.Citext
+  description    String?
+  created_by     String?          @db.Uuid
+  created_at     DateTime         @default(now()) @db.Timestamptz(6)
+  archived_at    DateTime?        @db.Timestamptz(6)
+  skill_versions skill_versions[]
+  principals     principals?      @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  namespaces     namespaces       @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs           orgs             @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([namespace_id, name])
+}
+
+model a2a_push_configs {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id     String   @db.Uuid
+  run_id     String   @unique @db.Uuid
+  url        String
+  token_ref  String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  orgs       orgs     @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs       runs     @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model peer_tasks {
+  id                                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id                             String       @db.Uuid
+  run_id                             String       @db.Uuid
+  step_id                            String       @unique @db.Uuid
+  peer_id                            String       @db.Uuid
+  binding                            peer_binding
+  child_run_id                       String?      @db.Uuid
+  remote_task_id                     String?
+  remote_context_id                  String?
+  state                              String       @default("submitted")
+  error                              Json?
+  last_observed_at                   DateTime?    @db.Timestamptz(6)
+  created_at                         DateTime     @default(now()) @db.Timestamptz(6)
+  runs_peer_tasks_child_run_idToruns runs?        @relation("peer_tasks_child_run_idToruns", fields: [child_run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orgs                               orgs         @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  peers                              peers        @relation(fields: [peer_id], references: [id], onUpdate: NoAction)
+  runs_peer_tasks_run_idToruns       runs         @relation("peer_tasks_run_idToruns", fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  steps                              steps        @relation(fields: [step_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([peer_id, remote_task_id], map: "peer_tasks_remote_idx", where: raw("(remote_task_id IS NOT NULL)"))
+  @@index([run_id], map: "peer_tasks_run_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model promotion_gates {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id         String      @db.Uuid
+  agent_id       String      @db.Uuid
+  environment    environment
+  eval_suite_id  String      @db.Uuid
+  min_score      Decimal     @default(0.7) @db.Decimal(6, 4)
+  allow_override Boolean     @default(false)
+  created_at     DateTime    @default(now()) @db.Timestamptz(6)
+  agents         agents      @relation(fields: [agent_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  eval_suites    eval_suites @relation(fields: [eval_suite_id], references: [id], onUpdate: NoAction)
+  orgs           orgs        @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([agent_id, environment])
+  @@index([agent_id, environment], map: "promotion_gates_lookup_idx")
+}
+
+enum agent_lifetime {
+  registered
+  ephemeral
+}
+
+enum artifact_state {
+  live
+  expiring
+  deleted
+}
+
+enum data_class {
+  internal
+  regulated
+}
+
+enum durability_tier {
+  strict
+  relaxed
+}
+
+enum effect_class {
+  read_only
+  idempotent
+  non_idempotent
+  transactional
+  compensatable
+  essential
+  human_approval_required
+  cacheable
+}
+
+enum enforcement_level {
+  org
+  namespace
+  tenant
+  agent
+  worker_pool
+  model
+  tool
+  mcp_server
+  peer
+  speech_provider
+}
+
+enum environment {
+  staging
+  production
+}
+
+enum grant_source {
+  service
+  user
+}
+
+enum interaction_kind {
+  approval
+  question
+  clarification
+  authentication
+  escalation
+}
+
+enum interaction_status {
+  pending
+  resolved
+  expired
+  cancelled
+}
+
+enum lineage_node_kind {
+  run
+  step
+  tool_invocation
+  memory
+  artifact
+  interaction
+  peer_result
+  user_input
+  model_output
+}
+
+enum mcp_transport {
+  stdio
+  streamable_http
+}
+
+enum memory_provenance {
+  user_input
+  model_output
+  tool_output
+  peer_result
+  artifact
+  consolidated
+}
+
+enum memory_scope {
+  org
+  tenant
+  user
+  agent
+  thread
+  run
+}
+
+enum memory_tier {
+  working
+  conversational
+  semantic
+  episodic
+  procedural
+  external
+}
+
+enum peer_binding {
+  local
+  remote
+}
+
+enum principal_kind {
+  human
+  workload
+  service
+}
+
+enum registry_status {
+  active
+  deprecated
+  disabled
+}
+
+enum residency {
+  internal
+  external
+}
+
+enum run_initiator {
+  api
+  trigger
+  schedule
+  peer
+  sub_agent
+}
+
+enum run_status {
+  queued
+  running
+  tool_execution
+  checkpointed
+  waiting
+  completed
+  failed
+  cancelled
+  dead_letter
+}
+
+enum saturation_policy {
+  queue
+  throttle
+  shed
+}
+
+enum speech_kind {
+  stt
+  tts
+}
+
+enum step_kind {
+  model_call
+  tool_call
+  memory_op
+  delegation
+  interaction
+  context_op
+  peer_call
+}
+
+enum step_status {
+  pending
+  running
+  succeeded
+  failed
+  cancelled
+  compensated
+}
+
+enum tool_origin {
+  native
+  http
+  function
+  mcp
+  peer
+}
+
+enum transport {
+  sse
+  webhook
+  poll
+  voice_webrtc
+  voice_telephony
+}
+
+enum trigger_type {
+  http
+  event
+  webhook
+  schedule
+  callback
+}
