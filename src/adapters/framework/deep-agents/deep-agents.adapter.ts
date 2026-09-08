@@ -88,9 +88,9 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
   async run(session: RunSession): Promise<RunOutcome> {
     const { spec, host } = session;
 
-    // See `Resumption` on `settle` below. One slot, consumed by the first replayed call
-    // that matches it, so the platform's already-settled work is not done a second time.
-    const pending = session.resume ? new ResumeSlot(session.resume) : null;
+    // What earlier drives of this run already settled. See `ReplayLedger` for why a
+    // resumed super-step would otherwise repeat calls that had nothing to do with the wait.
+    const ledger = new ReplayLedger(session.state, session.resume);
 
     // Skills, recalled memory and retrieved knowledge, projected as files the framework's
     // own middleware reads. See `PlatformBackend` for why a filesystem, and for what
@@ -114,7 +114,7 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
 
     const agent = createDeepAgent({
       model: new HostChatModel(host, [...profile.excludedTools]),
-      tools: this.toolsFor(session, pending),
+      tools: this.toolsFor(session, ledger),
       systemPrompt: {
         base: spec.systemPrompt ?? undefined,
         ...(profile.systemPromptSuffix ? { suffix: profile.systemPromptSuffix } : {}),
@@ -213,13 +213,20 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
    * methods, not one -- the model picking a name is presentation; what the platform does
    * with it is semantics.
    */
-  private toolsFor(session: RunSession, pending: ResumeSlot | null) {
+  private toolsFor(session: RunSession, ledger: ReplayLedger) {
     const { spec, host } = session;
 
     const bound = spec.tools.map((t) =>
       tool(
-        async (args: Record<string, unknown>) =>
-          settle(pending, t.ref, () => host.callTool(t.ref, args), `tool ${t.ref}`),
+        async (args: Record<string, unknown>, runtime: { toolCallId?: string }) =>
+          settle(
+            ledger,
+            host,
+            t.ref,
+            runtime?.toolCallId,
+            () => host.callTool(t.ref, args),
+            `tool ${t.ref}`,
+          ),
         {
           name: t.ref,
           description: t.description ?? `Invoke ${t.ref}`,
@@ -230,10 +237,12 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
 
     const delegates = spec.subAgents.map((a) =>
       tool(
-        async (args: { input?: unknown }) =>
+        async (args: { input?: unknown }, runtime: { toolCallId?: string }) =>
           settle(
-            pending,
+            ledger,
+            host,
             a.alias,
+            runtime?.toolCallId,
             () => host.delegate(a.alias, args.input ?? null),
             `delegation to ${a.alias}`,
           ),
@@ -253,10 +262,12 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
 
     const peers = spec.peers.map((p) =>
       tool(
-        async (args: { input?: unknown }) =>
+        async (args: { input?: unknown }, runtime: { toolCallId?: string }) =>
           settle(
-            pending,
+            ledger,
+            host,
             p.alias,
+            runtime?.toolCallId,
             () => host.peerCall(p.alias, args.input ?? null),
             `peer call to ${p.alias}`,
           ),
@@ -278,24 +289,74 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
 }
 
 /**
- * Holds the value a resumed run is carrying, to be claimed once by the call it answers.
+ * What a resumed run already knows, so nothing with an effect is done twice.
  *
- * Single-use and ref-matched. A run suspended on `demo.pay` must not have its receipt
- * handed to `demo.lookup` merely because that one happened to replay first.
+ * ## The problem this exists for
+ *
+ * LangGraph resumes by RE-EXECUTING the interrupted super-step from the top. If the model
+ * asked for three tools in one turn and the second suspended for approval, then on resume
+ * all three run again -- and the first and third have already happened. Both attempts
+ * succeed, the duplicate is invisible, and it was caused by the approval gate that existed
+ * to prevent exactly this.
+ *
+ * ## What it does
+ *
+ * Every settled call is recorded under its tool-call id -- the id the MODEL minted, which
+ * is in the checkpointed graph state and therefore identical on replay. On resume, a
+ * recorded call returns its recorded answer instead of reaching the platform at all.
+ *
+ * The id is the right key rather than name-plus-arguments: an agent that legitimately
+ * calls the same tool twice with the same arguments (retry a flaky read, charge two
+ * identical line items) has two distinct calls, and merging them would be the same bug
+ * pointed the other way.
+ *
+ * ## Why not rely on the platform's idempotency key
+ *
+ * `tool_invocations.idempotency_key` is rendered from `{runId, stepId}` and a replay gets
+ * a fresh step, so the key differs and the dedupe does not fire. That mechanism is about
+ * retrying ONE step; this is about not re-entering a step that already finished.
  */
-class ResumeSlot {
-  private taken = false;
-  constructor(private readonly resume: { value: unknown; ref: string | null }) {}
+class ReplayLedger {
+  private readonly settled: Map<string, string>;
+  private readonly resume: { value: unknown; ref: string | null } | null;
+  private resumeTaken = false;
 
-  /** True when this call is the one the platform already settled. */
-  claims(ref: string): boolean {
-    if (this.taken) return false;
+  constructor(state: unknown, resume: { value: unknown; ref: string | null } | null) {
+    const saved = (state as { settled?: Record<string, string> } | null)?.settled;
+    this.settled = new Map(Object.entries(saved ?? {}));
+    this.resume = resume;
+  }
+
+  /** What this exact call returned on an earlier drive, if it completed then. */
+  recall(callId: string | undefined): string | undefined {
+    return callId ? this.settled.get(callId) : undefined;
+  }
+
+  record(callId: string | undefined, output: string): string {
+    if (callId) this.settled.set(callId, output);
+    return output;
+  }
+
+  /**
+   * True when this call is the one the platform suspended on and has now settled.
+   *
+   * Matched on ref rather than taken by whoever asks first: a run suspended on `demo.pay`
+   * must not have its receipt handed to `demo.lookup` merely because that one replayed
+   * sooner.
+   */
+  claimsResume(ref: string): boolean {
+    if (!this.resume || this.resumeTaken) return false;
     return this.resume.ref === null || this.resume.ref === ref;
   }
 
-  take(): unknown {
-    this.taken = true;
-    return this.resume.value;
+  takeResume(): unknown {
+    this.resumeTaken = true;
+    return this.resume?.value;
+  }
+
+  /** The opaque snapshot handed to `host.saveState`, checkpointed with the suspension. */
+  snapshot(): { settled: Record<string, string> } {
+    return { settled: Object.fromEntries(this.settled) };
   }
 }
 
@@ -309,23 +370,11 @@ class ResumeSlot {
  * checkpointer persists the graph exactly where it stopped, and the run leaves the queue.
  * That is how a 24-hour approval wait costs nothing while it waits.
  *
- * ## Resumption, and the trap in it
+ * ## Resumption
  *
- * LangGraph resumes a task by RE-EXECUTING it from the top, up to the `interrupt()` that
- * suspended it -- so everything before that call runs a second time. Left alone, that
- * means `host.callTool` fires again on resume, and the payment a human just approved is
- * sent twice. It is a quiet failure: both calls succeed, and the duplicate is caused by
- * the approval gate that existed to prevent exactly this.
- *
- * So the resumed value short-circuits the host entirely. The platform already executed
- * the approved call during `resumePendingAction` and handed back what it produced; this
- * returns that, and never reaches `interrupt()` at all.
- *
- * KNOWN LIMIT: if the model requested several tools in one turn and one of them
- * suspended, the others do re-execute on resume, because LangGraph replays the whole
- * super-step. Idempotent tools are deduplicated by their idempotency key (§4.5); a
- * non-idempotent one issued alongside an approval-gated one is not. Narrowing that needs
- * per-call write-ahead records, which is Phase 7's business, not a comment's.
+ * LangGraph resumes by RE-EXECUTING the interrupted super-step from the top, so every
+ * call in it runs again -- both the one that suspended and the ones beside it. The
+ * `ReplayLedger` above is what makes that safe; see its comment for why.
  *
  * ## Failure
  *
@@ -333,17 +382,29 @@ class ResumeSlot {
  * default, and a failed tool is information the agent can act on.
  */
 async function settle(
-  pending: ResumeSlot | null,
+  ledger: ReplayLedger,
+  host: RunHost,
   ref: string,
+  callId: string | undefined,
   invoke: () => Promise<Awaited<ReturnType<RunHost['callTool']>>>,
   what: string,
 ): Promise<string> {
-  if (pending?.claims(ref)) return render(pending.take());
+  // Already done on an earlier drive. Returning the recorded answer is what keeps a
+  // replayed super-step from repeating the calls that had nothing to do with the wait.
+  const done = ledger.recall(callId);
+  if (done !== undefined) return done;
+
+  // This is the call the platform suspended on, and it has since settled it. Reaching the
+  // host here would execute the approved payment a second time.
+  if (ledger.claimsResume(ref)) return ledger.record(callId, render(ledger.takeResume()));
 
   const outcome = await invoke();
-  if (outcome.kind === 'ok') return render(outcome.output);
-  if (outcome.kind === 'error') return `error: ${outcome.message}`;
+  if (outcome.kind === 'ok') return ledger.record(callId, render(outcome.output));
+  if (outcome.kind === 'error') return ledger.record(callId, `error: ${outcome.message}`);
 
+  // Recorded BEFORE interrupting, because `interrupt()` does not return -- it throws a
+  // control signal that unwinds the graph. Saving afterwards would save nothing.
+  host.saveState(ledger.snapshot());
   return render(interrupt({ reason: outcome.reason, ref: outcome.ref, what }));
 }
 

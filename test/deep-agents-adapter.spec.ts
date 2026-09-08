@@ -485,3 +485,76 @@ describe('two kinds of sub-agent, kept apart (Phase 6, §13.3)', () => {
     expect(host.modelCalls.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe('a replayed super-step does not repeat its neighbours (Phase 7, §4.5)', () => {
+  const twoTools = spec({
+    tools: [
+      { ref: 'demo.lookup', description: 'read something', inputSchema: { type: 'object' } },
+      { ref: 'demo.pay', description: 'send money', inputSchema: { type: 'object' } },
+    ],
+  });
+
+  it('does not re-run the sibling tool when one of them suspends for approval', async () => {
+    const runId = `da-siblings-${Math.random().toString(36).slice(2, 8)}`;
+    threads.push(runId);
+
+    // One model turn requesting BOTH tools. LangGraph runs them in the same super-step.
+    const turn = {
+      text: '',
+      toolCalls: [
+        { name: 'demo.lookup', args: { id: 1 } },
+        { name: 'demo.pay', args: { amount: 100 } },
+      ],
+    };
+
+    const first = new ScriptedHost([turn], (ref) =>
+      ref === 'demo.pay'
+        ? { kind: 'suspended', reason: 'approval', ref: 'demo.pay' }
+        : { kind: 'ok', output: 'balance 500' },
+    );
+    const out = await asTenant(() => adapter.run(session(first, { runId, spec: twoTools })));
+    expect(out.type).toBe('suspended');
+    expect(first.toolCalls.map((c) => c.ref).sort()).toEqual(['demo.lookup', 'demo.pay']);
+
+    // Resume. LangGraph re-executes the whole super-step, so without the ledger
+    // `demo.lookup` would be called a second time -- and had it been a write rather than a
+    // read, it would have happened twice because a human approved something else.
+    const second = new ScriptedHost([{ text: 'All done.' }], () => ({ kind: 'ok', output: 'x' }));
+    await asTenant(() =>
+      adapter.run(
+        session(second, {
+          runId,
+          spec: twoTools,
+          state: JSON.parse(JSON.stringify(first.saved)) as unknown,
+          resume: { value: 'paid: receipt-9', ref: 'demo.pay' },
+        }),
+      ),
+    );
+
+    expect(second.toolCalls).toHaveLength(0);
+  });
+
+  it('records the ledger BEFORE interrupting, since interrupt() never returns', async () => {
+    const host = new ScriptedHost(
+      [
+        {
+          text: '',
+          toolCalls: [
+            { name: 'demo.lookup', args: { id: 1 } },
+            { name: 'demo.pay', args: { amount: 100 } },
+          ],
+        },
+      ],
+      (ref) =>
+        ref === 'demo.pay'
+          ? { kind: 'suspended', reason: 'approval', ref: 'demo.pay' }
+          : { kind: 'ok', output: 'balance 500' },
+    );
+    await asTenant(() => adapter.run(session(host, { spec: twoTools })));
+
+    // `interrupt()` throws a control signal that unwinds the graph, so a saveState after
+    // it would save nothing and the resumed run would re-read the balance.
+    const saved = host.saved as { settled: Record<string, string> };
+    expect(Object.values(saved.settled)).toContain('balance 500');
+  });
+});
