@@ -239,11 +239,16 @@ export interface RunSession {
    * adapter replaying several calls can tell which one this value answers. Null when the
    * platform could not attribute it.
    *
+   * `failed` says whether the thing waited on SUCCEEDED. Stated rather than left to be
+   * inferred from the payload: an adapter sniffing for an `error` key is guessing, and a
+   * child agent whose legitimate output happens to contain that word would be read as a
+   * failure. The platform knows the answer; making it say so is one boolean.
+   *
    * The platform cannot enforce it from out here -- it does not know which of the
    * framework's calls were already made. What it CAN do is make the reason unmissable,
    * which is what this comment is for.
    */
-  resume: { value: unknown; ref: string | null } | null;
+  resume: { value: unknown; ref: string | null; failed: boolean } | null;
   /** Whatever the last `saveState()` recorded, or null on a fresh run. */
   state: unknown;
   /**

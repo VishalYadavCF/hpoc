@@ -44,17 +44,40 @@ beforeAll(async () => {
   }
 
   // A real MCP server speaking Streamable HTTP: one POST endpoint, JSON-RPC, no session.
+  //
+  // It answers `initialize` because the protocol requires it, which the hand-written
+  // client this repo used to ship never sent -- so this fake never had to answer it, and
+  // the omission was invisible until a spec-compliant client asked. Any real server would
+  // have rejected us.
   mcpServer = createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
       seenAuth.push(req.headers.authorization);
-      const rpc = JSON.parse(raw || '{}') as { id: number; method: string; params?: Record<string, unknown> };
+      const rpc = JSON.parse(raw || '{}') as {
+        id?: number;
+        method: string;
+        params?: Record<string, unknown>;
+      };
       const reply = (result: unknown) => {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }));
       };
-      if (rpc.method === 'tools/list') {
+      if (!rpc.method) {
+        // A GET or DELETE to the endpoint: the client probing for the SSE stream and
+        // session teardown that the 2026-07-28 revision removed. 405 is the correct
+        // "this server does not do that", and answering it keeps the log clean.
+        res.writeHead(405, { allow: 'POST' }).end();
+      } else if (rpc.method === 'initialize') {
+        reply({
+          protocolVersion: (rpc.params?.['protocolVersion'] as string) ?? '2025-06-18',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'probe', version: '1.0.0' },
+        });
+      } else if (rpc.method.startsWith('notifications/')) {
+        // A notification carries no id and expects no body -- only an acknowledgement.
+        res.writeHead(202).end();
+      } else if (rpc.method === 'tools/list') {
         reply({
           tools: [{
             name: 'lookup',

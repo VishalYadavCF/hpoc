@@ -265,7 +265,7 @@ describe('suspension survives the framework owning the loop', () => {
     const second = new ScriptedHost([{ text: 'Payment sent.' }]);
     const out = await asTenant(() =>
       adapter.run(
-        session(second, { runId, spec: gated, resume: { value: 'paid: receipt-9', ref: 'demo.pay' } }),
+        session(second, { runId, spec: gated, resume: { value: 'paid: receipt-9', ref: 'demo.pay', failed: false } }),
       ),
     );
 
@@ -526,7 +526,7 @@ describe('a replayed super-step does not repeat its neighbours (Phase 7, §4.5)'
           runId,
           spec: twoTools,
           state: JSON.parse(JSON.stringify(first.saved)) as unknown,
-          resume: { value: 'paid: receipt-9', ref: 'demo.pay' },
+          resume: { value: 'paid: receipt-9', ref: 'demo.pay', failed: false },
         }),
       ),
     );

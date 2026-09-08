@@ -25,10 +25,8 @@ import { InMemoryCache } from './memory/in-memory.cache.js';
 import { PostgresRelationIndex } from './memory/postgres.relation-index.js';
 import { ExtractiveSummarizer } from './memory/extractive.summarizer.js';
 import { FilesystemObjectStore } from './storage/filesystem.object-store.js';
-import { StreamableHttpMcpClient } from './protocol/mcp/streamable-http.mcp-client.js';
 import { InMemoryResponseCache } from './cache/in-memory.response-cache.js';
-import { StdioMcpClient } from './protocol/mcp/stdio.mcp-client.js';
-import { McpRouter } from './protocol/mcp/mcp.router.js';
+import { LangChainMcpClient } from './protocol/mcp/langchain.mcp-client.js';
 import { HttpEgressSandbox } from './sandbox/http-egress.sandbox.js';
 import { ContainerSandbox } from './sandbox/container.sandbox.js';
 import { SandboxRouter } from './sandbox/sandbox.router.js';
@@ -83,9 +81,7 @@ import type { ModelProvider } from '../domain/ports/model-provider.port.js';
     PostgresRelationIndex,
     ExtractiveSummarizer,
     FilesystemObjectStore,
-    StreamableHttpMcpClient,
-    StdioMcpClient,
-    McpRouter,
+    LangChainMcpClient,
     InMemoryResponseCache,
     {
       provide: FRAMEWORK_ADAPTER,
@@ -127,7 +123,7 @@ import type { ModelProvider } from '../domain/ports/model-provider.port.js';
     // §2.1: a protocol adapter, never the domain model. `tsconfig.core.json` compiles the
     // core with this excluded, which is what keeps that claim honest.
     // The registry decides the transport, never the caller (§18.5).
-    { provide: MCP_CLIENT, useExisting: McpRouter },
+    { provide: MCP_CLIENT, useExisting: LangChainMcpClient },
     { provide: RESPONSE_CACHE, useExisting: InMemoryResponseCache },
     {
       // Adding a provider is one entry here and one row in `models`. The OpenAI-compatible

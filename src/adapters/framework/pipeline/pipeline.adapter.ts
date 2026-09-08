@@ -39,12 +39,12 @@ export class PipelineAdapter implements FrameworkAdapter {
 
     // Fold the outcome of the stage we suspended on before deciding the next one.
     if (session.resume && state.index > 0) {
-      const value = session.resume.value;
-      const failed = typeof value === 'object' && value !== null && 'error' in value;
+      // `failed` comes from the platform, not from sniffing the payload. A stage whose
+      // legitimate output happened to mention an error would otherwise halt the pipeline.
       results[state.index - 1] = {
         alias: stages[state.index - 1]?.alias ?? 'unknown',
-        output: value,
-        failed,
+        output: session.resume.value,
+        failed: session.resume.failed,
       };
     }
 

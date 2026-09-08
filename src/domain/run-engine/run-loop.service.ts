@@ -234,14 +234,18 @@ export class RunLoop {
     // A run resumed from a suspension must FINISH the thing it was suspended on before
     // the framework is asked to reason again. Each of these settles the open step and
     // yields the value the framework has been blocked waiting for.
-    let resume: { value: unknown; ref: string | null } | null = null;
+    let resume: { value: unknown; ref: string | null; failed: boolean } | null = null;
 
     if (restored?.pendingAction) {
       const resolved = await this.resumePendingAction(
         run, version, lease, restored.pendingAction, bindings,
       );
       if (resolved.kind === 'halt') return;
-      resume = { value: resolved.observation.content, ref: restored.pendingAction.toolRef };
+      resume = {
+        value: resolved.observation.content,
+        ref: restored.pendingAction.toolRef,
+        failed: resolved.observation.kind === 'tool_error',
+      };
     }
 
     // §4.6: a resumed parent reconciles children that settled while it was down. The
@@ -250,7 +254,11 @@ export class RunLoop {
     if (restored?.pendingDelegation) {
       const resolved = await this.resumeDelegation(run, version, lease, restored.pendingDelegation);
       if (resolved.kind === 'halt') return;
-      resume = { value: resolved.observation.content, ref: restored.pendingDelegation.alias };
+      resume = {
+        value: resolved.observation.content,
+        ref: restored.pendingDelegation.alias,
+        failed: resolved.observation.kind === 'delegation_error',
+      };
     }
 
     // A peer task settles the same way, through a different reader. A LOCAL peer's
@@ -259,7 +267,11 @@ export class RunLoop {
     if (restored?.pendingPeerCall) {
       const resolved = await this.resumePeerCall(run, version, lease, restored.pendingPeerCall);
       if (resolved.kind === 'halt') return;
-      resume = { value: resolved.observation.content, ref: restored.pendingPeerCall.alias };
+      resume = {
+        value: resolved.observation.content,
+        ref: restored.pendingPeerCall.alias,
+        failed: resolved.observation.kind === 'delegation_error',
+      };
     }
 
     const host = this.makeHost(run, version, lease, bindings, subAgents, restored?.stepSeq ?? 0);
@@ -406,7 +418,12 @@ export class RunLoop {
       },
     };
 
-    const api: RunHost = {
+    // Assigned onto `host` rather than returned as a second object. `Object.assign` copies
+    // PRIMITIVES BY VALUE, so a merged pair would give the caller a frozen snapshot of
+    // `stepSeq`, `stopped` and `suspended` taken before the run began -- and the stop check
+    // in `drive()` would then read `null` forever, turning an exceeded budget into a
+    // completed run. One object, one identity.
+    const api: Omit<RunHost, never> = {
       saveState: (state) => {
         host.frameworkState = state;
       },
@@ -468,7 +485,8 @@ export class RunLoop {
         }),
     };
 
-    return Object.assign(api, host);
+    Object.assign(host, api);
+    return host as typeof host & RunHost;
   }
 
   /**

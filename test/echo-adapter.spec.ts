@@ -114,7 +114,7 @@ describe('echo adapter — §0.3 second orchestration adapter', () => {
     const out = await new EchoAdapter().run(
       session(host, {
         spec: spec({ tools: [{ ref: 'demo.pay', description: null, inputSchema: {} }] }),
-        resume: { value: { charged: true }, ref: 'demo.pay' },
+        resume: { value: { charged: true }, ref: 'demo.pay', failed: false },
       }),
     );
 
@@ -160,7 +160,7 @@ describe('pipeline adapter — a framework with no checkpointer of its own', () 
         spec: stages,
         // What the platform restored from the checkpoint, having crossed JSON.
         state: JSON.parse(JSON.stringify({ index: 1, results: [] })) as unknown,
-        resume: { value: { intent: 'refund' }, ref: 'intent' },
+        resume: { value: { intent: 'refund' }, ref: 'intent', failed: false },
       }),
     );
 
@@ -179,7 +179,7 @@ describe('pipeline adapter — a framework with no checkpointer of its own', () 
       session(host, {
         spec: stages,
         state: { index: 1, results: [] },
-        resume: { value: { error: 'intent agent failed' }, ref: 'intent' },
+        resume: { value: { error: 'intent agent failed' }, ref: 'intent', failed: true },
       }),
     );
 

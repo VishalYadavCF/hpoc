@@ -91,7 +91,14 @@ describe('threads (§3)', () => {
     // something the agent said.
     const created = (await (
       await post(`/v1/threads/${thread.id}/runs`, {
-        agent: { model: { ref: 'internal/echo' }, execution: { limits: { maxSteps: 1 } } },
+        // Two steps wanted, one allowed: the model call fits, the tool call does not.
+        // `maxSteps: 1` alone no longer fails a one-step run -- it used to, through an
+        // off-by-one that made every ceiling one lower than it read.
+        agent: {
+          model: { ref: 'internal/echo' },
+          tools: ['demo.echo'],
+          execution: { limits: { maxSteps: 1 } },
+        },
         input: 'doomed turn',
       })
     ).json()) as { runId: string };
