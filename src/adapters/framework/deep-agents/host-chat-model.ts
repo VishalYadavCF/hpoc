@@ -33,6 +33,17 @@ export class HostChatModel extends BaseChatModel {
 
   constructor(
     private readonly host: RunHost,
+    /**
+     * Framework-provided tool names the pinned policy denies (§17.3).
+     *
+     * Enforced HERE rather than by removing the tools from the graph, because a
+     * middleware's tools are injected by the middleware and there is no honest way to
+     * reach in and delete them. Hiding is sufficient: a tool the model was never told
+     * about is a tool the model cannot request, and LangGraph's tool node only runs what
+     * the model requested. Anything the model DOES request that touches the outside world
+     * still goes through `callTool`, which refuses whatever is not bound.
+     */
+    private readonly excludedTools: readonly string[] = [],
     fields?: BaseChatModelParams,
   ) {
     super(fields ?? {});
@@ -46,8 +57,10 @@ export class HostChatModel extends BaseChatModel {
     // Mutating a clone, not `this`: the graph binds tools once and reuses the result, and
     // a shared instance whose tool list changed underneath a concurrent call would send
     // one node's schemas with another node's messages.
-    const clone = new HostChatModel(this.host) as this;
-    clone.boundTools = tools.map((t) => toSchema(t));
+    const clone = new HostChatModel(this.host, this.excludedTools) as this;
+    clone.boundTools = tools
+      .map((t) => toSchema(t))
+      .filter((t) => !this.excludedTools.includes(t.name));
     return clone;
   }
 

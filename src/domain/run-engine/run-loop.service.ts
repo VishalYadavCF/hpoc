@@ -285,6 +285,7 @@ export class RunLoop {
         knowledge,
         subAgents: subAgents.map((a) => ({ alias: a.alias, description: null })),
         peers: version.peers.map((p) => ({ alias: p.alias, description: null })),
+        harness: version.harness,
       },
       input: run.input,
       state: restored?.adapterState ?? null,

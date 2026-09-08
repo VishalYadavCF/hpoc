@@ -75,6 +75,7 @@ const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
   knowledge: [],
   subAgents: [],
   peers: [],
+  harness: { excludedTools: [], systemPromptSuffix: null },
   ...over,
 });
 
@@ -380,5 +381,48 @@ describe('skills and memory behind DeepAgents own middleware (Phase 4)', () => {
     expect(backend.edit(path, 'STEP ONE', 'SKIP').error).toMatch(/cannot be edited/);
     // Scratch space is still writable, or the filesystem tools would be useless.
     expect(backend.write('/workspace/notes.md', 'draft').error).toBeUndefined();
+  });
+});
+
+describe('the policy shapes the framework surface too (Phase 5)', () => {
+  it('hides a framework tool the pinned policy denies', async () => {
+    const open = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(open)));
+    const before = (open.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    expect(before).toContain('write_file');
+
+    const locked = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(
+        session(locked, {
+          spec: spec({ harness: { excludedTools: ['write_file'], systemPromptSuffix: null } }),
+        }),
+      ),
+    );
+
+    // Until the framework was allowed to bring its own tools, "this agent may not write
+    // files" was unsayable: the platform had no name for a tool it did not grant.
+    expect((locked.modelCalls[0]!.tools ?? []).map((t) => t.name)).not.toContain('write_file');
+  });
+
+  it('appends per-model tuning AFTER the registry prompt, not inside it', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(
+        session(host, {
+          spec: spec({
+            systemPrompt: 'AUTHORED PROMPT BODY',
+            harness: { excludedTools: [], systemPromptSuffix: 'Answer in one sentence.' },
+          }),
+        }),
+      ),
+    );
+
+    const prompt = host.modelCalls[0]!.systemPrompt ?? '';
+    expect(prompt).toContain('AUTHORED PROMPT BODY');
+    expect(prompt).toContain('Answer in one sentence.');
+    // Order matters: the nudge is a suffix so that swapping models does not require a new
+    // prompt version -- and therefore a new eval baseline -- every time (§17.2).
+    expect(prompt.indexOf('AUTHORED PROMPT BODY')).toBeLessThan(prompt.indexOf('Answer in one'));
   });
 });

@@ -62,6 +62,23 @@ export interface ResolvedVersion {
   peers: { alias: string; peerId: string }[];
   cache: { modelResponses: boolean; ttlSeconds: number };
   context: { maxChars: number; reserveForAnswer: number; compaction: boolean; eviction: boolean };
+  /**
+   * How the pinned policy shapes the framework's own surface (§17.3).
+   *
+   * Distinct from the tool BINDINGS, which admission already narrowed: by the time a run
+   * starts, a denied bound tool is simply not bound. This is about the tools a framework
+   * brings with it -- a scratch filesystem, a planner, a sub-agent spawner -- which the
+   * platform has never had a vocabulary for. A policy saying "this agent may not write
+   * files" was, until now, unsayable.
+   */
+  harness: HarnessShaping;
+}
+
+export interface HarnessShaping {
+  /** Framework-provided tool names the policy denies. Matched case-sensitively. */
+  excludedTools: string[];
+  /** Text appended after the resolved system prompt, for per-model tuning (§17.2). */
+  systemPromptSuffix: string | null;
 }
 
 @Injectable()
@@ -333,10 +350,25 @@ export class AgentVersionService {
       .select([
         'id', 'spec', 'model_id', 'durability', 'max_steps',
         'max_cost_micros', 'workload_identity_id', 'data_class', 'prompt_version_id',
+        'policy_version_id',
       ])
       .where('id', '=', id)
       .executeTakeFirst();
     if (!row) throw new NotFound('agent version', id);
+
+    // The PINNED policy version, not the policy's current head. §17.3 makes a version's
+    // governance part of what it is; re-reading the head here would let an edit to a
+    // policy change how an already-admitted version behaves, with no new admission and
+    // nothing in the trace to show it happened.
+    const policyDocument = row.policy_version_id
+      ? ((
+          await db
+            .selectFrom('policy_versions')
+            .select('document')
+            .where('id', '=', row.policy_version_id)
+            .executeTakeFirst()
+        )?.document ?? null)
+      : null;
 
     // Skills come from the PIN TABLE, never from the spec blob. The blob holds the refs
     // the author typed ("billing-refunds"); the pins hold what admission resolved them to.
@@ -400,6 +432,7 @@ export class AgentVersionService {
       knowledge?: { collections?: string[]; recallLimit?: number };
       cache?: { modelResponses?: boolean; ttlSeconds?: number };
       context?: { maxChars?: number; reserveForAnswer?: number; compaction?: boolean; eviction?: boolean };
+      harness?: { systemPromptSuffix?: string | null };
     };
 
     return {
@@ -440,6 +473,28 @@ export class AgentVersionService {
         compaction: spec.context?.compaction ?? true,
         eviction: spec.context?.eviction ?? true,
       },
+      harness: harnessShaping(policyDocument, spec),
     };
   }
+}
+
+/**
+ * What the pinned policy and the spec say about the FRAMEWORK's own surface (§17.3).
+ *
+ * Read from the policy's tool denylist, reusing the list an operator already maintains
+ * rather than adding a second one they must remember to keep in step. A denied name that
+ * matches no framework tool is silently inert -- the same list also denies bound tools,
+ * and admission already refused those, so a miss here means "that entry was about a bound
+ * tool", not "the operator made a mistake".
+ */
+function harnessShaping(
+  document: unknown,
+  spec: { harness?: { systemPromptSuffix?: string | null } },
+): HarnessShaping {
+  const tools = (document as { tools?: { deny?: unknown } } | null)?.tools;
+  const deny = Array.isArray(tools?.deny) ? tools.deny.filter((d): d is string => typeof d === 'string') : [];
+  return {
+    excludedTools: deny,
+    systemPromptSuffix: spec.harness?.systemPromptSuffix ?? null,
+  };
 }

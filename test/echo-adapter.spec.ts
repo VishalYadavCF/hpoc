@@ -53,6 +53,7 @@ const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
   knowledge: [],
   subAgents: [],
   peers: [],
+  harness: { excludedTools: [], systemPromptSuffix: null },
   ...over,
 });
 

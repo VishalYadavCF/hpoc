@@ -90,6 +90,33 @@ export interface AgentSpecView {
   subAgents: SubAgentHandle[];
   /** Peers this version may call — another team, another trust domain (§13.3). */
   peers: PeerHandle[];
+  /**
+   * How the platform's registries shape the FRAMEWORK's own surface (§17.2, §17.3).
+   *
+   * Everything above this describes what the platform resolved FOR the framework. This
+   * describes limits ON it -- specifically on the tools and prompt scaffolding a framework
+   * brings that the platform did not give it. Until frameworks were allowed to bring any,
+   * there was nothing here to say.
+   *
+   * An adapter for a framework with no built-in tools ignores it correctly by doing
+   * nothing, which is why it is advice rather than enforcement: the platform still refuses
+   * anything unbound at `callTool`, so a framework that ignores an exclusion loses a tool
+   * from its prompt, not a boundary from its sandbox.
+   */
+  harness: HarnessShapingView;
+}
+
+export interface HarnessShapingView {
+  /**
+   * Framework-provided tool names the pinned policy denies.
+   *
+   * Not the same list admission enforced. A denied BOUND tool never reaches the run at
+   * all -- it is simply not in `tools`. These are the names that matched nothing there,
+   * kept because they may match something the framework contributes.
+   */
+  excludedTools: string[];
+  /** Appended after the resolved system prompt, for per-model tuning. */
+  systemPromptSuffix: string | null;
 }
 
 /** One turn of a conversation as the platform records it, framework-agnostic. */

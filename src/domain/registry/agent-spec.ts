@@ -130,6 +130,19 @@ export const agentSpecSchema = z
       })
       .default({ modelResponses: false, ttlSeconds: 300 }),
 
+    /**
+     * Per-model prompt tuning, applied AFTER the resolved system prompt (§17.2).
+     *
+     * Separate from `systemPrompt` because the two are versioned by different people on
+     * different cadences: the prompt is an authored, registry-governed artifact, and this
+     * is the small nudge a particular model needs to follow it. Folding the nudge into the
+     * prompt would mean a new prompt version -- and a new eval baseline -- every time a
+     * model is swapped.
+     */
+    harness: z
+      .object({ systemPromptSuffix: z.string().max(4_000).nullable().default(null) })
+      .default({ systemPromptSuffix: null }),
+
     // §16.1 Constraint 2. Without this the residency gate is unreachable from the
     // ephemeral path, which makes a security control decorative -- the spec could name an
     // external model and nothing would object.

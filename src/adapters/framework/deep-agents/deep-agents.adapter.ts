@@ -1,5 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { createDeepAgent, createMemoryMiddleware, createSkillsMiddleware } from 'deepagents';
+import {
+  createDeepAgent,
+  createHarnessProfile,
+  createMemoryMiddleware,
+  createSkillsMiddleware,
+} from 'deepagents';
 import { tool } from '@langchain/core/tools';
 import { Command, interrupt } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph';
@@ -71,10 +76,28 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
     // stays above it.
     const backend = new PlatformBackend(spec);
 
+    // §17.2/§17.3 shaping, computed from the pinned policy and prompt. DeepAgents' own
+    // vocabulary for this, built from OUR registries.
+    //
+    // Not registered through `registerHarnessProfile`: that registry is process-global and
+    // keyed by model spec, so two tenants running different policies against the same
+    // model would overwrite each other's -- silently, and in whichever order their runs
+    // happened to start. The fields are applied at construction instead, which is
+    // per-run and therefore per-tenant by construction.
+    const profile = createHarnessProfile({
+      excludedTools: spec.harness.excludedTools,
+      ...(spec.harness.systemPromptSuffix
+        ? { systemPromptSuffix: spec.harness.systemPromptSuffix }
+        : {}),
+    });
+
     const agent = createDeepAgent({
-      model: new HostChatModel(host),
+      model: new HostChatModel(host, [...profile.excludedTools]),
       tools: this.toolsFor(session, pending),
-      systemPrompt: spec.systemPrompt ?? undefined,
+      systemPrompt: {
+        base: spec.systemPrompt ?? undefined,
+        ...(profile.systemPromptSuffix ? { suffix: profile.systemPromptSuffix } : {}),
+      },
       backend,
       middleware: [
         // Progressive disclosure: names and descriptions go in the prompt, bodies are
