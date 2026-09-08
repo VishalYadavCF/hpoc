@@ -156,6 +156,24 @@ export interface CheckpointsTable {
   parent_checkpoint_id: string | null; state: Json | null; state_artifact_id: string | null;
   state_hash: string; durability: DurabilityTier; created_at: TsD;
 }
+/**
+ * LangGraph's checkpoint store. Distinct from `CheckpointsTable`, which holds OUR
+ * resume state -- see migration 0026 for why the two models are not merged.
+ *
+ * `checkpoint` and `value` are bytea: SerializerProtocol.dumpsTyped hands back
+ * [type, Uint8Array] and is allowed to produce encodings JSON cannot round-trip.
+ */
+export interface LanggraphCheckpointsTable {
+  org_id: string; thread_id: string; checkpoint_ns: Generated<string>;
+  checkpoint_id: string; parent_checkpoint_id: string | null;
+  type: string | null; checkpoint: Buffer; metadata: JsonD;
+  created_at: TsD;
+}
+export interface LanggraphCheckpointWritesTable {
+  org_id: string; thread_id: string; checkpoint_ns: Generated<string>;
+  checkpoint_id: string; task_id: string; idx: number;
+  channel: string; type: string | null; value: Buffer | null;
+}
 export interface InteractionsTable {
   id: Generated<string>; run_id: string; thread_id: string; step_id: string | null;
   org_id: string; namespace_id: string; tenant_ref: string;
@@ -514,6 +532,8 @@ export interface Database {
   threads: ThreadsTable; runs: RunsTable; run_queue: RunQueueTable; steps: StepsTable;
   trace_export_cursor: TraceExportCursorTable;
   tool_invocations: ToolInvocationsTable; checkpoints: CheckpointsTable;
+  langgraph_checkpoints: LanggraphCheckpointsTable;
+  langgraph_checkpoint_writes: LanggraphCheckpointWritesTable;
   interactions: InteractionsTable; events: EventsTable; outbox: OutboxTable;
   dead_letters: DeadLettersTable; admission_decisions: AdmissionDecisionsTable;
   capability_grants: CapabilityGrantsTable; credential_grants: CredentialGrantsTable;

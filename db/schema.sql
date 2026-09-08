@@ -984,6 +984,49 @@ CREATE TABLE checkpoints (
 );
 CREATE INDEX checkpoints_run_idx ON checkpoints (run_id, step_seq DESC);
 
+-- LangGraph's own checkpoint store (migration 0026).
+--
+-- Separate from `checkpoints` above because the two model different things: ours is keyed
+-- (run_id, step_seq) and holds the pendingAction / pendingDelegation / pendingPeerCall a
+-- suspended run resumes into; LangGraph keys (thread_id, checkpoint_ns, checkpoint_id),
+-- keeps a parent pointer for forked threads, and needs a second relation for the pending
+-- writes of an interrupted task.
+--
+-- `bytea` rather than `jsonb` because SerializerProtocol.dumpsTyped returns
+-- [type, Uint8Array] and may produce encodings JSON cannot round-trip.
+--
+-- org_id is NOT NULL and RLS-scoped: a checkpoint holds a run's whole conversation state,
+-- so an unscoped table here would be a way around every policy added in 0020 and 0023.
+CREATE TABLE langgraph_checkpoints (
+    org_id               uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    thread_id            text NOT NULL,
+    checkpoint_ns        text NOT NULL DEFAULT '',
+    checkpoint_id        text NOT NULL,
+    parent_checkpoint_id text,
+    type                 text,
+    checkpoint           bytea NOT NULL,
+    metadata             jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at           timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+);
+CREATE INDEX langgraph_checkpoints_thread_idx
+    ON langgraph_checkpoints (thread_id, checkpoint_ns, checkpoint_id DESC);
+CREATE INDEX langgraph_checkpoints_org_idx ON langgraph_checkpoints (org_id);
+
+CREATE TABLE langgraph_checkpoint_writes (
+    org_id        uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    thread_id     text NOT NULL,
+    checkpoint_ns text NOT NULL DEFAULT '',
+    checkpoint_id text NOT NULL,
+    task_id       text NOT NULL,
+    idx           integer NOT NULL,
+    channel       text NOT NULL,
+    type          text,
+    value         bytea,
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+);
+CREATE INDEX langgraph_checkpoint_writes_org_idx ON langgraph_checkpoint_writes (org_id);
+
 ALTER TABLE runs  ADD CONSTRAINT runs_last_checkpoint_fk
     FOREIGN KEY (last_checkpoint_id) REFERENCES checkpoints(id) ON DELETE SET NULL;
 ALTER TABLE runs  ADD CONSTRAINT runs_forked_from_fk

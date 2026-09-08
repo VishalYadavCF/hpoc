@@ -396,11 +396,12 @@ model eval_case_results {
   score        Decimal?   @db.Decimal(6, 4)
   passed       Boolean
   detail       Json?
+  trial        Int        @default(1) @db.SmallInt
   eval_cases   eval_cases @relation(fields: [eval_case_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   eval_runs    eval_runs  @relation(fields: [eval_run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   runs         runs?      @relation(fields: [run_id], references: [id], onUpdate: NoAction)
 
-  @@id([eval_run_id, eval_case_id])
+  @@id([eval_run_id, eval_case_id, trial])
 }
 
 model eval_cases {
@@ -436,6 +437,7 @@ model eval_runs {
   p50_latency_ms                                               Int?
   total_cost_micros                                            BigInt              @default(0)
   verdict                                                      String?
+  score_stderr                                                 Decimal?            @db.Decimal(6, 4)
   deployments                                                  deployments[]
   eval_case_results                                            eval_case_results[]
   agent_versions                                               agent_versions      @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -459,6 +461,7 @@ model eval_suites {
   created_at           DateTime          @default(now()) @db.Timestamptz(6)
   min_score            Decimal           @default(0.7) @db.Decimal(6, 4)
   min_mechanism_delta  Decimal           @default(0.05) @db.Decimal(6, 4)
+  trials_per_case      Int               @default(1)
   eval_cases           eval_cases[]
   eval_runs            eval_runs[]
   namespaces           namespaces        @relation(fields: [namespace_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -786,46 +789,48 @@ model namespaces {
 }
 
 model orgs {
-  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  slug                    String                    @unique @db.Citext
-  name                    String
-  created_at              DateTime                  @default(now()) @db.Timestamptz(6)
-  updated_at              DateTime                  @default(now()) @db.Timestamptz(6)
-  a2a_push_configs        a2a_push_configs[]
-  admission_decisions     admission_decisions[]
-  agent_versions          agent_versions[]
-  agents                  agents[]
-  artifacts               artifacts[]
-  backpressure_policies   backpressure_policies[]
-  budgets                 budgets[]
-  capability_grants       capability_grants[]
-  credential_grants       credential_grants[]
-  eval_suites             eval_suites[]
-  feedback                feedback[]
-  interactions            interactions[]
-  knowledge_collections   knowledge_collections[]
-  knowledge_documents     knowledge_documents[]
-  lineage_edges           lineage_edges[]
-  mcp_servers             mcp_servers[]
-  memory_records          memory_records[]
-  memory_sharing_policies memory_sharing_policies[]
-  models                  models[]
-  namespaces              namespaces[]
-  peer_tasks              peer_tasks[]
-  peers                   peers[]
-  policies                policies[]
-  principals              principals[]
-  promotion_gates         promotion_gates[]
-  prompts                 prompts[]
-  runs                    runs[]
-  skill_versions          skill_versions[]
-  skills                  skills[]
-  speech_providers        speech_providers[]
-  steps                   steps[]
-  tenants                 tenants[]
-  threads                 threads[]
-  tool_invocations        tool_invocations[]
-  tools                   tools[]
+  id                          String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                        String                        @unique @db.Citext
+  name                        String
+  created_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  a2a_push_configs            a2a_push_configs[]
+  admission_decisions         admission_decisions[]
+  agent_versions              agent_versions[]
+  agents                      agents[]
+  artifacts                   artifacts[]
+  backpressure_policies       backpressure_policies[]
+  budgets                     budgets[]
+  capability_grants           capability_grants[]
+  credential_grants           credential_grants[]
+  eval_suites                 eval_suites[]
+  feedback                    feedback[]
+  interactions                interactions[]
+  knowledge_collections       knowledge_collections[]
+  knowledge_documents         knowledge_documents[]
+  langgraph_checkpoint_writes langgraph_checkpoint_writes[]
+  langgraph_checkpoints       langgraph_checkpoints[]
+  lineage_edges               lineage_edges[]
+  mcp_servers                 mcp_servers[]
+  memory_records              memory_records[]
+  memory_sharing_policies     memory_sharing_policies[]
+  models                      models[]
+  namespaces                  namespaces[]
+  peer_tasks                  peer_tasks[]
+  peers                       peers[]
+  policies                    policies[]
+  principals                  principals[]
+  promotion_gates             promotion_gates[]
+  prompts                     prompts[]
+  runs                        runs[]
+  skill_versions              skill_versions[]
+  skills                      skills[]
+  speech_providers            speech_providers[]
+  steps                       steps[]
+  tenants                     tenants[]
+  threads                     threads[]
+  tool_invocations            tool_invocations[]
+  tools                       tools[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -1045,6 +1050,7 @@ model runs {
   created_at                                              DateTime            @default(now()) @db.Timestamptz(6)
   updated_at                                              DateTime            @default(now()) @db.Timestamptz(6)
   delivery                                                Json?
+  shadow_of_run_id                                        String?             @db.Uuid
   a2a_push_configs                                        a2a_push_configs?
   artifacts_artifacts_produced_by_run_idToruns            artifacts[]         @relation("artifacts_produced_by_run_idToruns")
   checkpoints_checkpoints_run_idToruns                    checkpoints[]       @relation("checkpoints_run_idToruns")
@@ -1076,6 +1082,8 @@ model runs {
   other_runs_runs_parent_run_idToruns                     runs[]              @relation("runs_parent_run_idToruns")
   runs_runs_root_run_idToruns                             runs?               @relation("runs_root_run_idToruns", fields: [root_run_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   other_runs_runs_root_run_idToruns                       runs[]              @relation("runs_root_run_idToruns")
+  runs_runs_shadow_of_run_idToruns                        runs?               @relation("runs_shadow_of_run_idToruns", fields: [shadow_of_run_id], references: [id], onUpdate: NoAction)
+  other_runs_runs_shadow_of_run_idToruns                  runs[]              @relation("runs_shadow_of_run_idToruns")
   tenants                                                 tenants?            @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   threads                                                 threads             @relation(fields: [thread_id], references: [id], onUpdate: NoAction)
   triggers                                                triggers?           @relation(fields: [trigger_id], references: [id], onUpdate: NoAction)
@@ -1090,6 +1098,7 @@ model runs {
   @@index([trace_id], map: "runs_trace_idx", where: raw("(trace_id IS NOT NULL)"))
   @@index([trace_id], map: "runs_trace_lookup_idx", where: raw("(trace_id IS NOT NULL)"))
   @@index([agent_version_id, status, created_at(sort: Desc)], map: "runs_version_status_idx")
+  @@index([shadow_of_run_id], where: raw("(shadow_of_run_id IS NOT NULL)"))
 }
 
 model speech_providers {
@@ -1289,6 +1298,12 @@ model tools {
   definition_hash                                                     String?
   status                                                              registry_status       @default(active)
   created_at                                                          DateTime              @default(now()) @db.Timestamptz(6)
+  http_method                                                         String                @default("POST")
+  path_template                                                       String?
+  arg_placement                                                       String?
+  static_headers                                                      Json                  @default("{}")
+  code_runtime                                                        String?
+  code_source                                                         String?
   agent_version_tools_agent_version_tools_compensation_tool_idTotools agent_version_tools[] @relation("agent_version_tools_compensation_tool_idTotools")
   agent_version_tools_agent_version_tools_tool_idTotools              agent_version_tools[] @relation("agent_version_tools_tool_idTotools")
   skill_version_tools                                                 skill_version_tools[]
@@ -1569,6 +1584,48 @@ model promotion_gates {
   @@index([agent_id, environment], map: "promotion_gates_lookup_idx")
 }
 
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model langgraph_checkpoint_writes {
+  org_id        String  @db.Uuid
+  thread_id     String
+  checkpoint_ns String  @default("")
+  checkpoint_id String
+  task_id       String
+  idx           Int
+  channel       String
+  type          String?
+  value         Bytes?
+  orgs          orgs    @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id, task_id, idx])
+  @@index([org_id], map: "langgraph_checkpoint_writes_org_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model langgraph_checkpoints {
+  org_id               String   @db.Uuid
+  thread_id            String
+  checkpoint_ns        String   @default("")
+  checkpoint_id        String
+  parent_checkpoint_id String?
+  type                 String?
+  checkpoint           Bytes
+  metadata             Json     @default("{}")
+  created_at           DateTime @default(now()) @db.Timestamptz(6)
+  orgs                 orgs     @relation(fields: [org_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id])
+  @@index([org_id], map: "langgraph_checkpoints_org_idx")
+  @@index([thread_id, checkpoint_ns, checkpoint_id(sort: Desc)], map: "langgraph_checkpoints_thread_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model trace_export_cursor {
+  id               Boolean  @id @default(true)
+  exported_through DateTime @db.Timestamptz(6)
+  updated_at       DateTime @default(now()) @db.Timestamptz(6)
+}
+
 enum agent_lifetime {
   registered
   ephemeral
@@ -1711,6 +1768,7 @@ enum run_initiator {
   schedule
   peer
   sub_agent
+  shadow
 }
 
 enum run_status {
