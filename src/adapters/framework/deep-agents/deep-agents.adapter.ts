@@ -56,6 +56,27 @@ import { PlatformBackend } from './platform.backend.js';
  * inside the graph and never reach `callTool`, so they produce no `steps` row. That is
  * correct for what they are: they mutate the agent's own working state and touch nothing
  * outside the process. Anything that leaves the process is a bound tool and is recorded.
+ *
+ * ## Two kinds of sub-agent, kept apart on purpose (§13.3)
+ *
+ * | | `task` (DeepAgents) | `delegate_to_<alias>` (ours) |
+ * |---|---|---|
+ * | Runs | in this process, this graph | a SEPARATE run |
+ * | Lifecycle | none of its own | own checkpoints, retries, status |
+ * | Agent version | none — the parent's | its own, with its own policy |
+ * | Parent while it works | blocked in-process | suspended to `waiting`, off the queue |
+ * | Failure | returns to the parent | contained or fatal per §13.5 |
+ * | Costs | on the parent's steps and ledger | on its own, against the origin ceiling |
+ *
+ * They are not two implementations of one idea. `task` exists to keep a long sub-task out
+ * of the main context window; delegation exists to hand work to an agent someone else
+ * owns, versions and governs. Collapsing them -- in either direction -- would lose
+ * something: as in-process sub-agents, our six-stage pipelines would silently stop having
+ * per-stage policies and budgets; as separate runs, a two-second context-isolation
+ * helper would cost a queue round trip and a checkpoint.
+ *
+ * So both are offered, and the model chooses by name. The names make the difference
+ * legible: `task` is anonymous, `delegate_to_billing` is not.
  */
 @Injectable()
 export class DeepAgentsAdapter implements FrameworkAdapter {

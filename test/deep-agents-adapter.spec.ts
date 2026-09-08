@@ -426,3 +426,62 @@ describe('the policy shapes the framework surface too (Phase 5)', () => {
     expect(prompt.indexOf('AUTHORED PROMPT BODY')).toBeLessThan(prompt.indexOf('Answer in one'));
   });
 });
+
+describe('two kinds of sub-agent, kept apart (Phase 6, §13.3)', () => {
+  const withBoth = spec({
+    subAgents: [{ alias: 'billing', description: 'Answers questions about invoices.' }],
+  });
+
+  it('offers the in-process helper and the platform delegation as DIFFERENT tools', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { spec: withBoth })));
+
+    const advertised = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    // `task`: DeepAgents' own, in-process, no lifecycle, exists to keep a long sub-task
+    // out of the main context window.
+    expect(advertised).toContain('task');
+    // `delegate_to_billing`: a separate run with its own agent version, policy, budget and
+    // checkpoints. Collapsing the two would silently strip per-stage governance from
+    // every pipeline the platform runs.
+    expect(advertised).toContain('delegate_to_billing');
+  });
+
+  it('gives the model the sub-agent DESCRIPTION, not just an alias', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { spec: withBoth })));
+
+    const handle = (host.modelCalls[0]!.tools ?? []).find((t) => t.name === 'delegate_to_billing');
+    // Picking the right one of six sub-agents by alias alone is exactly the guessing that
+    // produces a plausible wrong answer. The registry has always had this text; nothing
+    // used to carry it to the model.
+    expect(handle?.description).toContain('invoices');
+  });
+
+  it('sanitises an alias a provider would reject, rather than failing the run', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(
+        session(host, {
+          spec: spec({ subAgents: [{ alias: 'billing/refunds v2', description: null }] }),
+        }),
+      ),
+    );
+
+    const names = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    expect(names).toContain('delegate_to_billing_refunds_v2');
+  });
+
+  it('meters the in-process helper through the host like any other model call', async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'task', args: { description: 'sub', subagent_type: 'general-purpose' } }] },
+      { text: 'sub-agent answer' },
+      { text: 'final answer' },
+    ]);
+    await asTenant(() => adapter.run(session(host, { spec: withBoth })));
+
+    // The in-process sub-agent shares this adapter's HostChatModel, so its thinking is
+    // billed, budgeted and recorded exactly like the parent's. A framework sub-agent that
+    // reached a provider directly would be free reasoning nobody could see (§9).
+    expect(host.modelCalls.length).toBeGreaterThanOrEqual(3);
+  });
+});

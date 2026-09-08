@@ -283,7 +283,7 @@ export class RunLoop {
           instructions: sk.instructions,
         })),
         knowledge,
-        subAgents: subAgents.map((a) => ({ alias: a.alias, description: null })),
+        subAgents: subAgents.map((a) => ({ alias: a.alias, description: a.description })),
         peers: version.peers.map((p) => ({ alias: p.alias, description: null })),
         harness: version.harness,
       },
@@ -774,7 +774,11 @@ export class RunLoop {
     const bound = await this.db
       .selectFrom('agent_version_sub_agents as sa')
       .innerJoin('agents as a', 'a.id', 'sa.sub_agent_id')
-      .select(['sa.alias', 'sa.sub_agent_id', 'a.name'])
+      // `description` is what the model reads to choose between six sub-agents. It was
+      // never selected before because the old adapter had nowhere to put it -- the model
+      // saw an alias and nothing else, and picking the right one of six by name alone is
+      // exactly the guessing that produces a plausible wrong answer.
+      .select(['sa.alias', 'sa.sub_agent_id', 'a.name', 'a.description'])
       .where('sa.agent_version_id', '=', version.id)
       .execute();
 
