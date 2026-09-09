@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { PromptService } from '../../domain/prompt/prompt.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const publishBody = z.object({
   ref: z.string().min(1).max(200),
@@ -26,6 +27,7 @@ const versionParam = (value: string): number => {
  * because prompt authoring is mostly re-saving and a registry that counted keystrokes as
  * versions would make "which version is running" meaningless.
  */
+@ApiTags('prompts')
 @Controller('v1/prompts')
 export class PromptsController {
   constructor(private readonly prompts: PromptService) {}

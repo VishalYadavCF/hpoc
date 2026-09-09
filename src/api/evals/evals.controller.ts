@@ -4,6 +4,7 @@ import { EvalService } from '../../domain/eval/eval.service.js';
 import { EvalSuiteService } from '../../domain/eval/suite.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const MECHANISMS = [
   'summarization', 'compaction', 'memory_tiers', 'planning_scaffold', 'sub_agents',
@@ -59,6 +60,7 @@ const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
  * bounds it. A suite large enough to make that wrong should be split, or moved behind the
  * trigger path, which already does async.
  */
+@ApiTags('evals')
 @Controller('v1/evals')
 export class EvalsController {
   constructor(

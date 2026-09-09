@@ -5,6 +5,7 @@ import { PeerService } from '../../domain/peer/peer.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import type { SignedAgentCard } from '../../domain/peer/agent-card.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const registerBody = z
   .object({
@@ -29,6 +30,7 @@ const registerBody = z
  * routes cross-namespace invocation over A2A, so a peer that could only name agents in
  * the caller's own namespace would serve no purpose that `subAgents` does not already.
  */
+@ApiTags('peers')
 @Controller('v1/peers')
 export class PeersController {
   constructor(private readonly peers: PeerService) {}

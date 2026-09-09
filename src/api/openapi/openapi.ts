@@ -14,13 +14,23 @@ import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swag
  */
 const UNTENANTED = ['/healthz', '/readyz', '/metrics', '/v1/triggers', '/v1/ops', '/v1/a2a', '/ui'];
 
-/** Tag descriptions, so the sidebar groups 151 routes into something navigable. */
+/**
+ * Tag descriptions, so the sidebar groups 148 operations into something navigable.
+ *
+ * These names must match the `@ApiTags` on the controllers EXACTLY. They did not, once:
+ * Nest derives a tag from the controller class name when none is given, so
+ * `RunsController` became `Runs` while this list declared `runs` -- and the UI rendered
+ * twenty-one empty, unopenable sections above the real ones. A declared tag nothing uses
+ * is invisible in the document and obvious in the browser, which is why the test below
+ * asserts the two sets are equal rather than trusting this comment.
+ */
 const TAGS: [name: string, description: string][] = [
   ['runs', 'Start, read, stream, cancel, fork and replay runs (§4).'],
   ['threads', 'Multi-turn conversations and their transcripts (§3).'],
   ['interactions', 'Human-in-the-loop: approvals and questions raised mid-run (§14).'],
   ['agents', 'The agent registry: agents, versions and deployments (§17).'],
   ['memory', 'Recall, forget and the per-tenant memory tiers (§6).'],
+  ['memory-sharing', 'Cross-tenant memory sharing, opt-in per namespace (§6).'],
   ['artifacts', 'Large step output, offloaded out of Postgres (§11.2).'],
   ['catalog', 'Tools available to bind, and their effect contracts (§8).'],
   ['prompts', 'Versioned, governed prompt registry (§17.2).'],
@@ -65,6 +75,7 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
     .addTag('platform', 'Health, readiness and metrics. No tenancy.');
 
   for (const [name, description] of TAGS) builder.addTag(name, description);
+  const names = ['platform', ...TAGS.map(([name]) => name)];
 
   const document = SwaggerModule.createDocument(app, builder.build(), {
     // Nest's default operation ids are `Controller_method`, which collide across
@@ -73,7 +84,33 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
     operationIdFactory: (controllerKey, methodKey) => `${controllerKey}_${methodKey}`,
   });
 
-  return withTenancyHeaders(document);
+  return withTenancyHeaders(canonicalTags(document, new Set(names)));
+}
+
+/**
+ * Drops the controller-derived tag Nest adds when a method declares its own.
+ *
+ * Nest tags an operation with its controller's class name (`OpsController` -> `Ops`) and
+ * MERGES that with any `@ApiTags`, so an explicit tag adds a group rather than replacing
+ * one. `/healthz` came out as `['Ops', 'platform']` and appeared twice.
+ *
+ * Filtering to the declared set fixes it with one rule instead of a special case per
+ * controller, because the derived name is capitalised and no declared name is. The test
+ * asserts every operation still has a tag afterwards, so filtering can never silently
+ * empty the page.
+ */
+function canonicalTags(document: OpenAPIObject, declared: Set<string>): OpenAPIObject {
+  for (const item of Object.values(document.paths)) {
+    for (const operation of Object.values(item ?? {})) {
+      if (!operation || typeof operation !== 'object' || !('responses' in operation)) continue;
+      const op = operation as { tags?: string[] };
+      const kept = (op.tags ?? []).filter((t) => declared.has(t));
+      // A route on a controller nobody tagged keeps its derived name rather than losing
+      // its group entirely -- wrong-looking beats invisible, and the test says which.
+      if (kept.length > 0) op.tags = kept;
+    }
+  }
+  return document;
 }
 
 /**

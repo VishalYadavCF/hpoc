@@ -28,6 +28,7 @@ import type {
   RunStatus,
 } from '../../platform/persistence/schema.types.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 /** The inverse of the local transport's mapping, at the protocol edge (§13.4). */
 const A2A_STATE: Record<RunStatus, string> = {
@@ -75,6 +76,7 @@ const RPC = {
  * what it says about tenancy. §15.4 requires inbound context to be subject to a trust
  * policy rather than accepted because it arrived.
  */
+@ApiTags('a2a')
 @Controller()
 export class A2aController {
   constructor(

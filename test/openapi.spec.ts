@@ -103,6 +103,42 @@ describe('the OpenAPI document', () => {
     expect(fork?.properties).toHaveProperty('acknowledgeDuplicateEffects');
   });
 
+  it('has no declared tag that nothing uses, and no used tag that is undeclared', () => {
+    const declared = new Set((doc.tags ?? []).map((t) => t.name));
+    const used = new Set(
+      operations().flatMap(([, , op]) => (op as { tags?: string[] }).tags ?? []),
+    );
+
+    // This is the assertion that was missing when the docs first shipped. Nest derives a
+    // tag from the controller class name when none is given, so `RunsController` became
+    // `Runs` while the description list declared `runs`. Both sets were non-empty and the
+    // document validated -- but the UI rendered twenty-one empty, unopenable sections
+    // above the real ones. Nothing in the JSON looked wrong; only the browser did.
+    expect([...declared].filter((t) => !used.has(t))).toEqual([]);
+    expect([...used].filter((t) => !declared.has(t))).toEqual([]);
+  });
+
+  it('groups every operation under exactly one tag', () => {
+    const untagged = operations()
+      .filter(([, , op]) => ((op as { tags?: string[] }).tags ?? []).length === 0)
+      .map(([path, method]) => `${method.toUpperCase()} ${path}`);
+
+    // An untagged operation lands in a nameless group at the bottom of the page, which is
+    // where routes go to be never found.
+    expect(untagged).toEqual([]);
+  });
+
+  it('keeps health and metrics out of the operator surface', () => {
+    const tagsOf = (path: string) =>
+      ((doc.paths[path] as Record<string, { tags?: string[] }>)['get']?.tags ?? []);
+
+    // `/healthz` lives on OpsController for wiring reasons, but an orchestrator probing
+    // liveness is not an operator, and filing it under `ops` implies a tenancy it has not.
+    expect(tagsOf('/healthz')).toEqual(['platform']);
+    expect(tagsOf('/metrics')).toEqual(['platform']);
+    expect(tagsOf('/v1/ops/queue')).toEqual(['ops']);
+  });
+
   it('omits the HTML console from the API reference', () => {
     expect(doc.paths['/ui']).toBeUndefined();
   });

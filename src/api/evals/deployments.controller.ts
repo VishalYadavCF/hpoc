@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { DeploymentService } from '../../domain/eval/deployment.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const environment = z.enum(['staging', 'production']);
 
@@ -38,6 +39,7 @@ const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
  * statement about which version of THIS agent serves an environment, and the partial
  * unique index enforces exactly one active row per pair.
  */
+@ApiTags('deployments')
 @Controller('v1/agents/:name')
 export class DeploymentsController {
   constructor(private readonly deployments: DeploymentService) {}

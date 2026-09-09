@@ -1,12 +1,14 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { CatalogService } from '../../domain/registry/catalog.service.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 /**
  * The agent catalog (§17.6): a read-only discovery surface over agents, tools, MCP
  * servers, models, prompts and skills. Every route here derives its answer from the
  * owning registry -- there is nothing to publish or version at this address.
  */
+@ApiTags('catalog')
 @Controller('v1/catalog')
 export class CatalogController {
   constructor(private readonly catalog: CatalogService) {}

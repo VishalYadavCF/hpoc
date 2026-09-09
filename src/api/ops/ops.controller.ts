@@ -9,6 +9,7 @@ import { BackpressureService } from '../../domain/governance/backpressure.servic
 import { BudgetService } from '../../domain/governance/budget.service.js';
 import { NotFound } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 @Controller()
 export class OpsController {
@@ -20,6 +21,7 @@ export class OpsController {
     private readonly budgets: BudgetService,
   ) {}
 
+  @ApiTags('platform')
   @Doc({ summary: 'Liveness probe. No tenancy.' })
   @Get('healthz')
   health(): unknown {
@@ -27,6 +29,7 @@ export class OpsController {
   }
 
   /** Readiness checks the database AND that migrations have been applied. */
+  @ApiTags('platform')
   @Doc({ summary: 'Readiness probe. No tenancy.' })
   @Get('readyz')
   async ready(): Promise<unknown> {
@@ -37,6 +40,7 @@ export class OpsController {
     return { status: 'ok', migrations: Number(applied?.n ?? 0) };
   }
 
+  @ApiTags('platform')
   @Doc({ summary: 'Prometheus metrics. No tenancy.' })
   @Get('metrics')
   @Header('content-type', 'text/plain; version=0.0.4')
@@ -74,6 +78,7 @@ export class OpsController {
    * The failure history is the point -- reason, attempts, the worker that held it last,
    * and whether anyone has looked at it.
    */
+  @ApiTags('ops')
   @Doc({ summary: 'List dead-lettered runs' })
   @Get('v1/ops/dead-letters')
   async deadLetters(@Query('acknowledged') acknowledged?: string): Promise<unknown> {
@@ -96,6 +101,7 @@ export class OpsController {
    * scheduler and workers keep their hot paths to one cheap NOTIFY; operators ask for the
    * heavier counts only when diagnosing capacity, starvation, or a stalled reclaimer.
    */
+  @ApiTags('ops')
   @Doc({ summary: 'Queue depth and lease health' })
   @Get('v1/ops/queue')
   async queue(): Promise<unknown> {
@@ -151,6 +157,7 @@ export class OpsController {
     };
   }
 
+  @ApiTags('ops')
   @Doc({ summary: 'Read one dead letter' })
   @Get('v1/ops/dead-letters/:id')
   async deadLetter(@Param('id') id: string): Promise<unknown> {
@@ -168,6 +175,7 @@ export class OpsController {
     return { ...row, steps };
   }
 
+  @ApiTags('ops')
   @Doc({ summary: 'Acknowledge a dead letter' })
   @Post('v1/ops/dead-letters/:id/acknowledge')
   async acknowledge(@Param('id') id: string): Promise<unknown> {
@@ -182,12 +190,14 @@ export class OpsController {
     return { acknowledged: true };
   }
 
+  @ApiTags('ops')
   @Doc({ summary: 'Read backpressure policies' })
   @Get('v1/ops/backpressure')
   async policies(@Query('orgId') orgId: string): Promise<unknown> {
     return { policies: await this.backpressure.list(orgId) };
   }
 
+  @ApiTags('ops')
   @Doc({ summary: 'Set a backpressure policy' })
   @Post('v1/ops/backpressure')
   async setPolicy(@Body() body: Record<string, unknown>): Promise<unknown> {
@@ -203,6 +213,7 @@ export class OpsController {
   }
 
   /** §5.2 hierarchical budgets. */
+  @ApiTags('ops')
   @Doc({ summary: 'Read budget consumption for an org' })
   @Get('v1/ops/budgets')
   async budgetsFor(@Query('orgId') orgId: string): Promise<unknown> {
@@ -210,6 +221,7 @@ export class OpsController {
   }
 
   @Doc({ summary: 'Set a budget' })
+  @ApiTags('ops')
   @Doc({ summary: 'Set a budget' })
   @Post('v1/ops/budgets')
   async setBudget(@Body() body: Record<string, unknown>): Promise<unknown> {
@@ -223,6 +235,7 @@ export class OpsController {
   }
 
   /** §15.4: the platform is itself a distributed system and must report on itself. */
+  @ApiTags('ops')
   @Doc({ summary: 'Subsystem health across the platform' })
   @Get('v1/ops/subsystems')
   async subsystems(): Promise<unknown> {

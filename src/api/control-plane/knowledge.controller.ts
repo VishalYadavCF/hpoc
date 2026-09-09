@@ -4,6 +4,7 @@ import { requireContext } from '../../platform/context/platform-context.js';
 import { KnowledgeService } from '../../domain/knowledge/knowledge.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const collectionBody = z.object({
   name: z.string().min(1).max(120),
@@ -42,6 +43,7 @@ const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
  * unanswerable at exactly the moment it matters. Documents large enough to make that
  * wrong belong behind the artifact path, not behind a longer HTTP timeout.
  */
+@ApiTags('knowledge')
 @Controller('v1/knowledge')
 export class KnowledgeController {
   constructor(private readonly knowledge: KnowledgeService) {}

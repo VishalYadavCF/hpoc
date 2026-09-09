@@ -7,6 +7,7 @@ import { RunService } from '../../domain/run-engine/run.service.js';
 import { PeerService } from '../../domain/peer/peer.service.js';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const triggerBody = z
   .object({
@@ -50,6 +51,7 @@ const publishBody = z.object({
   exposeAsPeer: z.boolean().optional(),
 });
 
+@ApiTags('agents')
 @Controller('v1/agents')
 export class AgentsController {
   constructor(

@@ -5,6 +5,7 @@ import { AnalyticsService } from '../../domain/observability/analytics.service.j
 import { FeedbackService } from '../../domain/observability/feedback.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const feedbackBody = z
   .object({
@@ -27,6 +28,7 @@ const window = (hours?: string, agent?: string) => ({
   agentName: agent,
 });
 
+@ApiTags('observability')
 @Controller('v1')
 export class ObservabilityController {
   constructor(

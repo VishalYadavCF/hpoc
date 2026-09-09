@@ -1,6 +1,7 @@
 import { Body, Controller, Param, Post } from '@nestjs/common';
 import { TriggerService } from '../../domain/trigger/trigger.service.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 /**
  * Trigger ingress.
@@ -12,6 +13,7 @@ import { Doc } from '../openapi/api-doc.decorator.js';
  * Everything domain-shaped stays with the consuming service (§18.2). This turns a request
  * into a Run and nothing else.
  */
+@ApiTags('triggers')
 @Controller('v1/triggers')
 export class TriggersController {
   constructor(private readonly triggers: TriggerService) {}

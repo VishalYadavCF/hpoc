@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { McpRegistryService } from '../../domain/mcp/mcp-registry.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const registerBody = z.object({
   name: z.string().min(1).max(60).regex(/^[a-z0-9_-]+$/, 'lowercase, digits, _ or - only'),
@@ -21,6 +22,7 @@ const approveToolBody = z.object({
 
 const approveTenantBody = z.object({ tenantRef: z.string().min(1).nullable() });
 
+@ApiTags('mcp')
 @Controller('v1/mcp/servers')
 export class McpController {
   constructor(private readonly mcp: McpRegistryService) {}

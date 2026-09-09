@@ -12,6 +12,7 @@ import { EventLog } from '../../domain/event-log/event-log.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const forkBody = z.object({
   checkpointId: z.string().uuid().optional(),
@@ -42,6 +43,7 @@ const createRunBody = z.object({
   delivery: z.object({ webhookUrl: z.url() }).nullish(),
 });
 
+@ApiTags('runs')
 @Controller('v1/runs')
 export class RunsController {
   constructor(

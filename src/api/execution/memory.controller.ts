@@ -4,6 +4,7 @@ import { MemoryEngine } from '../../domain/memory/memory.engine.js';
 import { PlatformError, NotFound } from '../../domain/errors/platform.errors.js';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const TIERS = ['working', 'conversational', 'semantic', 'episodic', 'procedural', 'external'] as const;
 const SCOPES = ['org', 'tenant', 'user', 'agent', 'thread', 'run'] as const;
@@ -54,6 +55,7 @@ const consolidateBody = z.object({
   maxChars: z.number().int().positive().max(20_000).optional(),
 });
 
+@ApiTags('memory')
 @Controller('v1/memory')
 export class MemoryController {
   constructor(private readonly memory: MemoryEngine) {}

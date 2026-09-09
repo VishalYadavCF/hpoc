@@ -3,12 +3,14 @@ import { z } from 'zod';
 import { InteractionService } from '../../domain/interaction/interaction.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const respondBody = z.object({
   approved: z.boolean(),
   response: z.record(z.string(), z.unknown()).optional(),
 });
 
+@ApiTags('interactions')
 @Controller('v1/interactions')
 export class InteractionsController {
   constructor(private readonly interactions: InteractionService) {}

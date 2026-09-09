@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { PolicyService } from '../../domain/policy/policy.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const publishBody = z.object({
   ref: z.string().min(1).max(200),
@@ -33,6 +34,7 @@ const versionParam = (value: string): number => {
  * answers the question that precedes any tightening: who is pinned to this, and therefore
  * who has to republish before the change reaches them.
  */
+@ApiTags('policies')
 @Controller('v1/policies')
 export class PoliciesController {
   constructor(private readonly policies: PolicyService) {}

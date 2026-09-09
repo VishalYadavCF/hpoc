@@ -4,6 +4,7 @@ import { requireContext } from '../../platform/context/platform-context.js';
 import { SkillService } from '../../domain/skills/skill.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const publishBody = z.object({
   name: z.string().min(1).max(120),
@@ -23,6 +24,7 @@ const publishBody = z.object({
  * them, which sends the change back through admission where a widened tool set is
  * actually checked.
  */
+@ApiTags('skills')
 @Controller('v1/skills')
 export class SkillsController {
   constructor(private readonly skills: SkillService) {}

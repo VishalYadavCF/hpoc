@@ -5,6 +5,7 @@ import { RunService } from '../../domain/run-engine/run.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const createThreadBody = z
   .object({
@@ -19,6 +20,7 @@ const turnBody = z.object({
   input: z.unknown().optional(),
 });
 
+@ApiTags('threads')
 @Controller('v1/threads')
 export class ThreadsController {
   constructor(

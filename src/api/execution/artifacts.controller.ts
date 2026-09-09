@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ArtifactService } from '../../domain/artifact/artifact.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const MAX_INLINE_BYTES = 8 * 1024 * 1024;
 
@@ -22,6 +23,7 @@ const writeBody = z.object({
   message: 'content or contentBase64 is required',
 });
 
+@ApiTags('artifacts')
 @Controller('v1/artifacts')
 export class ArtifactsController {
   constructor(private readonly artifacts: ArtifactService) {}

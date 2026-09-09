@@ -6,6 +6,7 @@ import type { Db } from '../../platform/persistence/database.js';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const policyBody = z.object({
   tiers: z.array(z.enum(['working', 'conversational', 'semantic', 'episodic', 'procedural', 'external'])).min(1),
@@ -22,6 +23,7 @@ const policyBody = z.object({
  * for every namespace until someone here turns it on, and revocable without destroying
  * the corpus that was already contributed.
  */
+@ApiTags('memory-sharing')
 @Controller('v1/memory/sharing')
 export class MemorySharingController {
   constructor(@Inject(DB) private readonly db: Db) {}

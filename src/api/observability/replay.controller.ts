@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ReplayService } from '../../domain/run-engine/replay.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { Doc } from '../openapi/api-doc.decorator.js';
+import { ApiTags } from '@nestjs/swagger';
 
 const replayBody = z.object({
   runId: z.string().uuid(),
@@ -17,6 +18,7 @@ const replayBody = z.object({
  * that people cache or prefetch is the wrong shape for it. It is nonetheless a pure read
  * -- nothing executes, nothing is written (see ReplayService).
  */
+@ApiTags('replay')
 @Controller('v1/replay')
 export class ReplayController {
   constructor(private readonly replay: ReplayService) {}
