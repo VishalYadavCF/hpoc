@@ -56,6 +56,16 @@ export interface PeerHandle {
   description: string | null;
 }
 
+export interface InlineSubAgentHandle {
+  name: string;
+  description: string;
+  prompt: string;
+  /** A subset of the caller's tool refs; null means all of them. Narrows, never grants. */
+  tools: string[] | null;
+  /** Names of pinned skills this helper should see, out of the caller's own. */
+  skills: string[];
+}
+
 export interface AgentSpecView {
   modelRef: string;
   systemPrompt: string | null;
@@ -90,6 +100,18 @@ export interface AgentSpecView {
   subAgents: SubAgentHandle[];
   /** Peers this version may call — another team, another trust domain (§13.3). */
   peers: PeerHandle[];
+  /**
+   * In-process helpers: the same agent thinking in a fresh context.
+   *
+   * Deliberately NOT in `subAgents`. One of those is a registered agent with its own
+   * version, model, policy and budget, and it runs as a separate run. One of these has
+   * none of that -- it is a prompt and a narrower tool list, sharing the caller's model,
+   * ledger and step ceiling, and its whole value is a clean context window.
+   *
+   * A framework with no notion of in-process helpers ignores these correctly by doing
+   * nothing: the work still gets done, just in the main transcript.
+   */
+  inlineSubAgents: InlineSubAgentHandle[];
   /**
    * How the platform's registries shape the FRAMEWORK's own surface (§17.2, §17.3).
    *

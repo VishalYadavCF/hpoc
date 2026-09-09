@@ -8,10 +8,13 @@
 >    `src/platform` + `src/domain` with `src/adapters` excluded, so §2.1's "core compiles
 >    with adapters removed" is enforced by the build. Dropping the port would break
 >    `npm run build:core`.
-> 2. **Phase 6 reversed.** Sub-agents did NOT replace `pipeline.adapter.ts`. DeepAgents'
->    sub-agents run in-process; ours are separate runs with their own policy, budget and
->    lifecycle (§13.3). Both are offered; the pipeline adapter stays as the only
->    deterministic orchestrator.
+> 2. **Phase 6 reversed, then extended.** Sub-agents did NOT replace
+>    `pipeline.adapter.ts`, and a REGISTERED sub-agent is never run in-process: it has its
+>    own model, tools, policy and budget, and using DeepAgents' sub-agents for it would
+>    silently run a cheap classifier stage on the expensive model. But that ruled out the
+>    mapping, not the feature — so `inlineSubAgents` was added, declared to
+>    `createDeepAgent` as real named sub-agents and reached through `task`. The pipeline
+>    adapter stays as the only deterministic orchestrator.
 > 3. **Phase 9 partially declined.** `BaseSandbox` is not wired — it would grant shell
 >    execution that does not exist today, which is a capability increase rather than a
 >    free win.

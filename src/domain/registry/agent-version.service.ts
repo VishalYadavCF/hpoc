@@ -74,6 +74,17 @@ export interface ResolvedVersion {
   harness: HarnessShaping;
   /** JSON Schema the final answer must satisfy, or null when the agent declared none. */
   responseSchema: Record<string, unknown> | null;
+  /** In-process helpers: a prompt and a tool subset, no version of their own. */
+  inlineSubAgents: InlineSubAgent[];
+}
+
+export interface InlineSubAgent {
+  name: string;
+  description: string;
+  prompt: string;
+  /** Null means "every tool the parent has". */
+  tools: string[] | null;
+  skills: string[];
 }
 
 export interface HarnessShaping {
@@ -436,6 +447,7 @@ export class AgentVersionService {
       context?: { maxChars?: number; reserveForAnswer?: number; compaction?: boolean; eviction?: boolean };
       harness?: { systemPromptSuffix?: string | null };
       responseSchema?: Record<string, unknown> | null;
+      inlineSubAgents?: InlineSubAgent[];
     };
 
     return {
@@ -478,6 +490,7 @@ export class AgentVersionService {
       },
       harness: harnessShaping(policyDocument, spec),
       responseSchema: spec.responseSchema ?? null,
+      inlineSubAgents: spec.inlineSubAgents ?? [],
     };
   }
 }

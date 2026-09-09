@@ -38,7 +38,7 @@ adapter — 244 lines — was a hand-written message state machine that **never 
 | a scratch filesystem | nothing |
 | skills middleware, progressive disclosure | every skill's full body in every prompt |
 | memory middleware | the same, concatenated |
-| sub-agents | nothing in-process |
+| named in-process sub-agents | nothing; every hand-off was a separate run |
 | summarization | nothing; the transcript was unbounded |
 | structured output | nothing; ask for JSON in prose and parse it |
 | a checkpointer | ours, but the framework's state was not in it |
@@ -84,14 +84,26 @@ about that.
 
 ## What we did NOT collapse
 
-Two things the plan proposed to merge, and that working through them said to keep apart.
+Two things the plan proposed to merge, and that working through them said to keep apart —
+though the first only after a correction.
 
-**Sub-agents are two different things.** DeepAgents' `task` runs in-process with no
-lifecycle. Ours is a separate run with its own agent version, policy, budget, checkpoints
-and retries, and the parent suspends to `waiting`. Collapsing them loses something either
-way: as in-process helpers, consumer 02's six pipeline stages silently stop having
-per-stage policies and budgets; as separate runs, a two-second context-isolation helper
-costs a queue round trip and a checkpoint. Both are offered; the model picks by name.
+**Sub-agents are two different things, so there are two.** A registered sub-agent has its
+own `AgentVersion` — own model, own tools, own policy, own budget ceiling. Run in-process
+it would silently use the *caller's* model and tool grants, so a cheap classifier stage
+would quietly run on the expensive model. That is why `subAgents` always becomes a separate
+run (`delegate_to_<alias>`), and why consumer 02's six pipeline stages keep their per-stage
+governance.
+
+That argument rules out *that mapping*, not the feature. So `inlineSubAgents` was added:
+a name, a description, a prompt and a narrower slice of the caller's own tools, declared to
+`createDeepAgent` as real DeepAgents sub-agents and reached through `task`. They inherit the
+model, the host, the ledger and the step ceiling deliberately — a helper is the same agent
+thinking in a fresh context, and letting one buy its own model or its own step budget would
+make both ceilings meaningless. Their whole value is the clean context window: a forty-call
+research detour that does not sit in the main transcript for the rest of the run.
+
+The `tools` list **narrows and never grants**. A name the caller does not have is dropped,
+and would be refused at execution anyway.
 
 **`pipeline.adapter.ts` stays.** It was slated for deletion. It is the only *deterministic*
 orchestrator, and a six-stage pipeline is precisely the case where the model must not

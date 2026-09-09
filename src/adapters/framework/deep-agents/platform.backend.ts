@@ -79,6 +79,17 @@ export class PlatformBackend implements BackendProtocolV2 {
     }
   }
 
+  /**
+   * The directory holding one named skill, for a helper that should see only some.
+   *
+   * Returns undefined when the skill was not pinned to this version, so a helper cannot
+   * name a skill into existence -- the projection contains only what admission resolved.
+   */
+  skillPath(name: string): string | undefined {
+    const path = `/skills/${slug(name)}/SKILL.md`;
+    return this.files.has(path) ? `/skills/${slug(name)}/` : undefined;
+  }
+
   /** Paths the skills middleware should scan; empty when the version pinned none. */
   skillSources(): string[] {
     return [...this.files.keys()].some((p) => p.startsWith('/skills/')) ? ['/skills/'] : [];

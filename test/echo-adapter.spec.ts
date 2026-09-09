@@ -54,6 +54,7 @@ const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
   subAgents: [],
   peers: [],
   harness: { excludedTools: [], systemPromptSuffix: null },
+  inlineSubAgents: [],
   responseSchema: null,
   context: { compaction: false, maxChars: 24_000 },
   ...over,

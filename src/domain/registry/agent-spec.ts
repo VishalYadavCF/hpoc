@@ -131,6 +131,46 @@ export const agentSpecSchema = z
       .default({ modelResponses: false, ttlSeconds: 300 }),
 
     /**
+     * In-process helpers: the same agent thinking in a fresh context (§7, §13.3).
+     *
+     * Distinct from `subAgents`, which names REGISTERED agents someone else owns and
+     * versions. One of those has its own model, tools, policy and budget ceiling, and
+     * running it in this process would silently use the CALLER's model and tool grants --
+     * a cheap classifier stage would quietly run on the expensive model. So a registered
+     * sub-agent is always a separate run.
+     *
+     * An inline helper has none of that: no version, no policy of its own, no separate
+     * budget. It is a prompt and a narrower tool list, and its whole value is a clean
+     * context window -- a forty-call research detour that does not have to sit in the main
+     * transcript for the rest of the run.
+     *
+     * `tools` may only NARROW the agent's own bound tools. Naming one it does not have
+     * grants nothing: the platform refuses anything unbound at execution regardless, so
+     * the list is about focus, not authority.
+     */
+    inlineSubAgents: z
+      .array(
+        z.object({
+          name: z
+            .string()
+            .min(1)
+            .max(64)
+            // The model selects a helper by this name through the `task` tool, and every
+            // vendor constrains tool arguments it validates; keeping the charset tight
+            // here means a legal name never fails at the provider.
+            .regex(/^[A-Za-z0-9_-]+$/, 'inline sub-agent names are [A-Za-z0-9_-]'),
+          description: z.string().min(1).max(500),
+          prompt: z.string().min(1).max(8_000),
+          /** A subset of the agent's own tools. Omitted means all of them. */
+          tools: z.array(z.string().min(1)).max(64).nullable().default(null),
+          /** Pinned skills, by name, this helper should see. Omitted means none. */
+          skills: z.array(z.string().min(1)).max(16).default([]),
+        }),
+      )
+      .max(8)
+      .default([]),
+
+    /**
      * JSON Schema the final answer must satisfy.
      *
      * The platform had no way to say this before. A consuming service that needed a shape

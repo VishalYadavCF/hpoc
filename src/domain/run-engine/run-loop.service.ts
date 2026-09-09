@@ -297,6 +297,7 @@ export class RunLoop {
         knowledge,
         subAgents: subAgents.map((a) => ({ alias: a.alias, description: a.description })),
         peers: version.peers.map((p) => ({ alias: p.alias, description: null })),
+        inlineSubAgents: version.inlineSubAgents,
         harness: version.harness,
         responseSchema: version.responseSchema,
         context: { compaction: version.context.compaction, maxChars: version.context.maxChars },

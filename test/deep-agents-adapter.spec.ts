@@ -76,6 +76,7 @@ const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
   subAgents: [],
   peers: [],
   harness: { excludedTools: [], systemPromptSuffix: null },
+  inlineSubAgents: [],
   responseSchema: null,
   context: { compaction: false, maxChars: 24_000 },
   ...over,
@@ -607,5 +608,88 @@ describe('the free wins (Phase 9)', () => {
     // over-eager summarisation does its damage invisibly.
     expect(off.modelCalls).toHaveLength(1);
     expect(on.modelCalls).toHaveLength(1);
+  });
+});
+
+describe('inline sub-agents — DeepAgents named helpers (§13.3)', () => {
+  const researcher = {
+    name: 'researcher',
+    description: 'Digs through the manuals. Use for open-ended lookups.',
+    prompt: 'YOU ARE THE RESEARCHER. Answer only from what you read.',
+    tools: ['demo.lookup'],
+    skills: [],
+  };
+  const withHelper = spec({
+    inlineSubAgents: [researcher],
+    tools: [
+      { ref: 'demo.lookup', description: 'read something', inputSchema: { type: 'object' } },
+      { ref: 'demo.pay', description: 'send money', inputSchema: { type: 'object' } },
+    ],
+  });
+
+  it('runs the helper with ITS OWN prompt in a fresh context', async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'task', args: { description: 'find it', subagent_type: 'researcher' } }] },
+      { text: 'the manual says 42' },
+      { text: 'The answer is 42.' },
+    ]);
+    await asTenant(() => adapter.run(session(host, { spec: withHelper })));
+
+    // The helper's turn carries its own system prompt, and NOT the parent's transcript --
+    // that clean context window is the entire point of an in-process helper.
+    const prompts = host.modelCalls.map((c) => c.systemPrompt ?? '');
+    expect(prompts.some((p) => p.includes('YOU ARE THE RESEARCHER'))).toBe(true);
+    expect(prompts.filter((p) => p.includes('YOU ARE THE RESEARCHER'))).toHaveLength(1);
+  });
+
+  it('narrows the helper to its declared tools', async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'task', args: { description: 'find it', subagent_type: 'researcher' } }] },
+      { text: 'found' },
+      { text: 'done' },
+    ]);
+    await asTenant(() => adapter.run(session(host, { spec: withHelper })));
+
+    const helperTurn = host.modelCalls.find((c) => (c.systemPrompt ?? '').includes('RESEARCHER'))!;
+    const offered = (helperTurn.tools ?? []).map((t) => t.name);
+    expect(offered).toContain('demo.lookup');
+    // A research helper has no business being able to send money. Narrowing is about
+    // focus, not authority -- `callTool` would still refuse anything unbound.
+    expect(offered).not.toContain('demo.pay');
+  });
+
+  it('meters the helper on the PARENT: same host, same ledger, same ceiling', async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'task', args: { description: 'find it', subagent_type: 'researcher' } }] },
+      { text: '', toolCalls: [{ name: 'demo.lookup', args: { id: 1 } }] },
+      { text: 'found 42' },
+      { text: 'The answer is 42.' },
+    ]);
+    await asTenant(() => adapter.run(session(host, { spec: withHelper })));
+
+    // The tool the HELPER called arrived through the parent's host, so it lands in the
+    // parent's steps and tool_invocations. A helper reaching a provider or a tool directly
+    // would be unbilled, unbudgeted, unrecorded work (§9, §4.5).
+    expect(host.toolCalls.map((c) => c.ref)).toContain('demo.lookup');
+  });
+
+  it('does not confuse a helper with a registered sub-agent', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(
+        session(host, {
+          spec: spec({
+            inlineSubAgents: [researcher],
+            subAgents: [{ alias: 'billing', description: 'Owns invoices.' }],
+          }),
+        }),
+      ),
+    );
+
+    const advertised = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    // `task` reaches the in-process helper: parent's model, parent's budget, no lifecycle.
+    expect(advertised).toContain('task');
+    // `delegate_to_billing` starts a separate run with its own version, policy and budget.
+    expect(advertised).toContain('delegate_to_billing');
   });
 });

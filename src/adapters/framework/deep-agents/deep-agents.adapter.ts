@@ -7,6 +7,7 @@ import {
   createSummarizationMiddleware,
 } from 'deepagents';
 import { tool } from '@langchain/core/tools';
+import type { StructuredTool } from '@langchain/core/tools';
 import { ToolStrategy } from 'langchain';
 import { Command, interrupt } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph';
@@ -18,6 +19,7 @@ import type {
   RunOutcome,
   RunSession,
 } from '../../../domain/ports/framework-adapter.port.js';
+import type { SubAgent } from 'deepagents';
 import { PostgresCheckpointSaver } from './postgres.checkpoint-saver.js';
 import { HostChatModel } from './host-chat-model.js';
 import { PlatformBackend } from './platform.backend.js';
@@ -114,9 +116,19 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
         : {}),
     });
 
+    // Concrete `StructuredTool`, not the interface: DeepAgents' SubAgent config wants the
+    // class, and `tool()` returns one -- the widening happens only where it is inferred.
+    const boundTools = this.toolsFor(session, ledger) as unknown as StructuredTool[];
+
     const agent = createDeepAgent({
       model: new HostChatModel(host, [...profile.excludedTools]),
-      tools: this.toolsFor(session, ledger),
+      tools: boundTools,
+      // Named in-process helpers, reached through the `task` tool. Each gets a fresh
+      // context window and its own prompt; all of them share this run's model, ledger,
+      // budget and step ceiling, because that is what makes them helpers rather than
+      // agents. A registered sub-agent -- own version, own policy, own budget -- is
+      // `delegate_to_<alias>` instead, and is a separate run.
+      subagents: inlineSubAgentsFor(session, backend, boundTools),
       systemPrompt: {
         base: spec.systemPrompt ?? undefined,
         ...(profile.systemPromptSuffix ? { suffix: profile.systemPromptSuffix } : {}),
@@ -318,6 +330,52 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
 
     return [...bound, ...delegates, ...peers];
   }
+}
+
+/**
+ * The spec's inline helpers, as DeepAgents sub-agents.
+ *
+ * Three things are deliberately inherited rather than configurable:
+ *
+ * - **The model.** A helper is the same agent thinking in a fresh context. Wanting a
+ *   different model means wanting a different agent, which is a registered sub-agent with
+ *   its own version -- and that runs as a separate run so its own policy and budget apply.
+ * - **The host.** Every tool a helper calls is the parent's tool, executed through the
+ *   parent's `callTool`, so it lands in the parent's `steps` and `tool_invocations`. A
+ *   helper cannot reach anything the parent could not.
+ * - **The step ceiling.** Its model calls count against the parent's `maxSteps`, which is
+ *   the only reading that makes the ceiling mean anything -- otherwise an agent could buy
+ *   unlimited reasoning by spawning helpers.
+ *
+ * `tools` NARROWS and never grants. A name the parent does not have is dropped here, and
+ * would be refused at execution anyway, so the list is about focus rather than authority.
+ */
+function inlineSubAgentsFor(
+  session: RunSession,
+  backend: PlatformBackend,
+  boundTools: StructuredTool[],
+): SubAgent[] {
+  return session.spec.inlineSubAgents.map((helper) => {
+    const skills = helper.skills
+      .map((name) => backend.skillPath(name))
+      .filter((path): path is string => path !== undefined);
+
+    return {
+      name: helper.name,
+      description: helper.description,
+      systemPrompt: helper.prompt,
+      // Omitting `tools` means "everything the parent has", which is DeepAgents' default.
+      // An empty array after filtering is NOT the same thing and is preserved: a helper
+      // declared with tools the parent lacks asked for none, and silently handing it all
+      // of them would be the opposite of what the author wrote.
+      ...(helper.tools === null
+        ? {}
+        : { tools: boundTools.filter((t) => helper.tools!.includes(t.name)) }),
+      // Custom sub-agents do NOT inherit the main agent's skills, so a helper that must
+      // follow a pinned procedure has to be handed the path explicitly.
+      ...(skills.length ? { skills } : {}),
+    };
+  });
 }
 
 /**
