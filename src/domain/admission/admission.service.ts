@@ -206,12 +206,16 @@ export class AdmissionService {
           .selectFrom('agents')
           .select(['id', 'name'])
           .where('namespace_id', '=', input.namespaceId)
-          .where('name', 'in', spec.subAgents)
+          .where(
+            'name',
+            'in',
+            spec.subAgents.map((sa) => sa.name),
+          )
           .where('archived_at', 'is', null)
           .execute()
       : [];
     const foundSubAgents = new Map(subAgents.map((a) => [a.name, a]));
-    for (const name of spec.subAgents) {
+    for (const { name } of spec.subAgents) {
       if (!foundSubAgents.has(name)) {
         rejections.push(
           `subAgents: "${name}" is not an agent in this namespace. Cross-namespace ` +
@@ -279,7 +283,9 @@ export class AdmissionService {
             name: p.name,
             residency: p.binding === 'local' ? ('internal' as const) : ('external' as const),
           })),
-          subAgents: spec.subAgents,
+          // The policy speaks about WHICH sub-agents may be used, not how they execute,
+          // so it sees names. `allowSubAgents: false` denies both modes alike.
+          subAgents: spec.subAgents.map((sa) => sa.name),
           maxCostMicros: spec.execution.limits.maxCostMicros,
         });
         rejections.push(...verdict.rejections);

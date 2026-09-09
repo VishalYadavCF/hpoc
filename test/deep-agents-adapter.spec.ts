@@ -63,6 +63,47 @@ class ScriptedHost implements RunHost {
   saveState(state: unknown) {
     this.saved = state;
   }
+  /**
+   * A child host that records WHICH agent asked, so a test can prove an in-process
+   * sub-agent's work was attributed to it rather than to its caller.
+   */
+  forSubAgent(alias: string): RunHost | null {
+    if (!this.children.has(alias)) this.children.set(alias, new FakeChild(alias, this));
+    return this.children.get(alias)!;
+  }
+  readonly children = new Map<string, FakeChild>();
+}
+
+/** The scoped host `forSubAgent` hands back, sharing the parent's script. */
+class FakeChild implements RunHost {
+  readonly modelCalls: HostModelRequest[] = [];
+  readonly toolCalls: { ref: string; args: Record<string, unknown> }[] = [];
+
+  constructor(
+    readonly alias: string,
+    private readonly parent: ScriptedHost,
+  ) {}
+
+  async callModel(request: HostModelRequest) {
+    this.modelCalls.push(request);
+    return this.parent.callModel(request);
+  }
+  async callTool(ref: string, args: Record<string, unknown>) {
+    this.toolCalls.push({ ref, args });
+    return this.parent.callTool(ref, args);
+  }
+  async delegate(alias: string): Promise<HostToolOutcome> {
+    return { kind: 'suspended', reason: 'delegation', ref: alias };
+  }
+  async peerCall(alias: string): Promise<HostToolOutcome> {
+    return { kind: 'suspended', reason: 'peer_call', ref: alias };
+  }
+  saveState(): void {}
+  forSubAgent(): RunHost | null {
+    // One level. An in-process child that could spawn its own in-process children would
+    // nest unboundedly inside a run with no delegation chain to check against (§4.6).
+    return null;
+  }
 }
 
 const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
@@ -432,7 +473,7 @@ describe('the policy shapes the framework surface too (Phase 5)', () => {
 
 describe('two kinds of sub-agent, kept apart (Phase 6, §13.3)', () => {
   const withBoth = spec({
-    subAgents: [{ alias: 'billing', description: 'Answers questions about invoices.' }],
+    subAgents: [{ alias: 'billing', description: 'Answers questions about invoices.', mode: 'run' as const, inline: null }],
   });
 
   it('offers the in-process helper and the platform delegation as DIFFERENT tools', async () => {
@@ -465,7 +506,7 @@ describe('two kinds of sub-agent, kept apart (Phase 6, §13.3)', () => {
     await asTenant(() =>
       adapter.run(
         session(host, {
-          spec: spec({ subAgents: [{ alias: 'billing/refunds v2', description: null }] }),
+          spec: spec({ subAgents: [{ alias: 'billing/refunds v2', description: null, mode: 'run' as const, inline: null }] }),
         }),
       ),
     );
@@ -680,7 +721,7 @@ describe('inline sub-agents — DeepAgents named helpers (§13.3)', () => {
         session(host, {
           spec: spec({
             inlineSubAgents: [researcher],
-            subAgents: [{ alias: 'billing', description: 'Owns invoices.' }],
+            subAgents: [{ alias: 'billing', description: 'Owns invoices.', mode: 'run' as const, inline: null }],
           }),
         }),
       ),
@@ -691,5 +732,110 @@ describe('inline sub-agents — DeepAgents named helpers (§13.3)', () => {
     expect(advertised).toContain('task');
     // `delegate_to_billing` starts a separate run with its own version, policy and budget.
     expect(advertised).toContain('delegate_to_billing');
+  });
+});
+
+describe("mode: 'inline' — a registered sub-agent inside its caller's run (§13.3)", () => {
+  const child = {
+    alias: 'classifier',
+    description: 'Sorts a request into one of five intents.',
+    mode: 'inline' as const,
+    inline: {
+      agentVersionId: 'ver-classifier',
+      systemPrompt: 'YOU ARE THE CLASSIFIER. Answer with one word.',
+      tools: [{ ref: 'demo.taxonomy', description: 'read the intent list', inputSchema: { type: 'object' } }],
+      skills: [
+        {
+          name: 'intent taxonomy',
+          version: 2,
+          whenToUse: 'always, before answering',
+          instructions: 'THE FIVE INTENTS ARE: refund, dispute, status, update, other.',
+        },
+      ],
+    },
+  };
+  const caller = spec({
+    subAgents: [child],
+    tools: [{ ref: 'demo.pay', description: 'send money', inputSchema: { type: 'object' } }],
+  });
+
+  it('is reached through `task`, NOT through a delegation handle', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { spec: caller })));
+
+    const advertised = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    expect(advertised).toContain('task');
+    // Offering both would let the model pick a semantics it cannot reason about: the two
+    // differ in retries, budget and whether a run exists afterwards to inspect.
+    expect(advertised).not.toContain('delegate_to_classifier');
+  });
+
+  it("runs with the CHILD's prompt and the CHILD's tools, not the caller's", async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'task', args: { description: 'classify', subagent_type: 'agent_classifier' } }] },
+      { text: 'refund' },
+      { text: 'Handled: refund.' },
+    ]);
+    await asTenant(() => adapter.run(session(host, { spec: caller })));
+
+    const childHost = host.children.get('classifier');
+    expect(childHost).toBeDefined();
+    const childTurn = childHost!.modelCalls[0]!;
+
+    expect(childTurn.systemPrompt).toContain('YOU ARE THE CLASSIFIER');
+    const offered = (childTurn.tools ?? []).map((t) => t.name);
+    expect(offered).toContain('demo.taxonomy');
+    // The caller can send money. A classifier bound inline must NOT inherit that -- if it
+    // did, `inline` would be a way to launder capability between agent versions.
+    expect(offered).not.toContain('demo.pay');
+  });
+
+  it("carries the CHILD's own pinned skills, which DeepAgents does not inherit", async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'task', args: { description: 'classify', subagent_type: 'agent_classifier' } }] },
+      { text: 'refund' },
+      { text: 'done' },
+    ]);
+    await asTenant(() => adapter.run(session(host, { spec: caller })));
+
+    const childTurn = host.children.get('classifier')!.modelCalls[0]!;
+    // Progressive disclosure still applies, so the selection hint is what appears.
+    expect(childTurn.systemPrompt).toContain('always, before answering');
+    // And the caller must not be handed a procedure belonging to an agent it delegates to.
+    expect(host.modelCalls[0]!.systemPrompt ?? '').not.toContain('always, before answering');
+  });
+
+  it('routes the child through its OWN host, so the spend is attributable', async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'task', args: { description: 'classify', subagent_type: 'agent_classifier' } }] },
+      { text: '', toolCalls: [{ name: 'demo.taxonomy', args: {} }] },
+      { text: 'refund' },
+      { text: 'Handled: refund.' },
+    ]);
+    await asTenant(() => adapter.run(session(host, { spec: caller })));
+
+    // Every call the child made went through the scoped host, which stamps
+    // `steps.agent_version_id`. Without that the child's model spend and tool calls land
+    // on the caller's version and no cost report can separate a stage from its caller.
+    const childHost = host.children.get('classifier')!;
+    expect(childHost.modelCalls.length).toBeGreaterThan(0);
+    expect(childHost.toolCalls.map((c) => c.ref)).toContain('demo.taxonomy');
+  });
+
+  it("still offers a delegation handle for a sibling bound 'run'", async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() =>
+      adapter.run(
+        session(host, {
+          spec: spec({
+            subAgents: [child, { alias: 'billing', description: 'Owns invoices.', mode: 'run', inline: null }],
+          }),
+        }),
+      ),
+    );
+
+    const advertised = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
+    expect(advertised).toContain('delegate_to_billing');
+    expect(advertised).not.toContain('delegate_to_classifier');
   });
 });

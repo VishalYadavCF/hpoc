@@ -80,6 +80,26 @@ export class PlatformBackend implements BackendProtocolV2 {
   }
 
   /**
+   * Projects an in-process sub-agent's OWN pinned skills, under its own prefix.
+   *
+   * A registered sub-agent bound `inline` (§13.3) brings its own skills, and DeepAgents
+   * sub-agents deliberately do not inherit the parent's. Without this the child would run
+   * without the procedures its author pinned to it -- silently, and producing plausible
+   * answers, which is the worst way to lose a skill.
+   *
+   * The prefix keeps them out of the parent's `/skills/` scan, so the caller's model is
+   * not offered procedures belonging to an agent it merely delegates to.
+   */
+  seedSubAgentSkills(alias: string, skills: SkillHandle[]): string[] {
+    if (skills.length === 0) return [];
+    const root = `/agents/${slug(alias)}/skills/`;
+    for (const skill of skills) {
+      this.seed(`${root}${slug(skill.name)}/SKILL.md`, skillDocument(skill));
+    }
+    return [root];
+  }
+
+  /**
    * The directory holding one named skill, for a helper that should see only some.
    *
    * Returns undefined when the skill was not pinned to this version, so a helper cannot

@@ -128,6 +128,8 @@ export interface RunQueueTable {
 }
 export interface StepsTable {
   id: Generated<string>; run_id: string; seq: number; parent_step_id: string | null;
+  /** NULL means the run's own version; set when an in-process sub-agent did the work. */
+  agent_version_id: string | null;
   kind: StepKind; status: Generated<StepStatus>; attempt: Generated<number>;
   org_id: string; namespace_id: string; tenant_ref: string;
   model_id: string | null; fallback_from_model_id: string | null; prompt_version_id: string | null;

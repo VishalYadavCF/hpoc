@@ -41,6 +41,37 @@ export interface KnowledgeSnippet {
 export interface SubAgentHandle {
   alias: string;
   description: string | null;
+  /**
+   * How this sub-agent executes (§13.3).
+   *
+   * `run` — a SEPARATE run. Own lifecycle, checkpoints, retries, budget ceiling and
+   * dead-lettering; the caller suspends to `waiting` until it settles. The default, and
+   * the only mode that gives the child everything a run row carries.
+   *
+   * `inline` — the child reasons INSIDE this run, with its own prompt, model and tools
+   * resolved from its own version. Milliseconds instead of a queue round trip, and a
+   * fresh context window. It gives up what lives on a run row: retries, dead-lettering,
+   * and a run of its own to inspect or resume.
+   */
+  mode: 'run' | 'inline';
+  /**
+   * What the child's version resolved to. Present only for `inline`.
+   *
+   * Resolved by the PLATFORM, not by the framework: the child's system prompt comes from
+   * its pinned prompt version, its tools from its own bindings, and its skills from its
+   * own pins. A framework given a name and left to invent the rest would be running
+   * something the registry never approved.
+   */
+  inline: InlineAgentView | null;
+}
+
+export interface InlineAgentView {
+  agentVersionId: string;
+  systemPrompt: string | null;
+  /** The CHILD's bound tools, which may differ from the caller's in both directions. */
+  tools: ToolHandle[];
+  /** The child's own pinned skills. */
+  skills: SkillHandle[];
 }
 
 /**
@@ -253,6 +284,21 @@ export interface RunHost {
    * platform stores this and never reads into it.
    */
   saveState(state: unknown): void;
+  /**
+   * A host scoped to an `inline` sub-agent, or null when the alias is not one.
+   *
+   * Everything the returned host does is attributed to the CHILD's version: its model
+   * call goes through the child's model with the child's residency class, its tool calls
+   * resolve against the child's bindings, and every `steps` row it writes carries
+   * `agent_version_id`. Without that last part the child's spend would land on the
+   * caller's version and no cost report could tell a stage's regression from its
+   * caller's.
+   *
+   * What it SHARES with the caller is the run: the same lease, the same step ceiling, the
+   * same cancellation signal, the same `runs.cost_micros`. An in-process child that could
+   * buy its own step budget would make the caller's ceiling meaningless.
+   */
+  forSubAgent(alias: string): RunHost | null;
 }
 
 export interface RunSession {

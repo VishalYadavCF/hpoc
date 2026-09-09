@@ -140,6 +140,7 @@ model agent_versions {
   eval_runs_eval_runs_executed_version_idToagent_versions        eval_runs[]                 @relation("eval_runs_executed_version_idToagent_versions")
   feedback                                                       feedback[]
   runs                                                           runs[]
+  steps                                                          steps[]
   triggers                                                       triggers[]
 
   @@unique([agent_id, version])
@@ -1148,12 +1149,14 @@ model steps {
   ended_at                                       DateTime?          @db.Timestamptz(6)
   latency_ms                                     Int?
   created_at                                     DateTime           @default(now()) @db.Timestamptz(6)
+  agent_version_id                               String?            @db.Uuid
   artifacts_artifacts_produced_by_step_idTosteps artifacts[]        @relation("artifacts_produced_by_step_idTosteps")
   dead_letters                                   dead_letters[]
   interactions                                   interactions[]
   memory_records                                 memory_records[]
   outbox                                         outbox[]
   peer_tasks                                     peer_tasks?
+  agent_versions                                 agent_versions?    @relation(fields: [agent_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   checkpoints                                    checkpoints?       @relation(fields: [checkpoint_id], references: [id], onUpdate: NoAction, map: "steps_checkpoint_fk")
   models_steps_fallback_from_model_idTomodels    models?            @relation("steps_fallback_from_model_idTomodels", fields: [fallback_from_model_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   artifacts_steps_input_artifact_idToartifacts   artifacts?         @relation("steps_input_artifact_idToartifacts", fields: [input_artifact_id], references: [id], onUpdate: NoAction, map: "steps_input_artifact_fk")
@@ -1171,6 +1174,7 @@ model steps {
   @@index([run_id, seq], map: "steps_run_idx")
   @@index([status], where: raw("(status = ANY (ARRAY['pending'::step_status, 'running'::step_status]))"))
   @@index([run_id, kind, latency_ms, status], map: "steps_kind_latency_idx")
+  @@index([agent_version_id], map: "steps_agent_version_idx", where: raw("(agent_version_id IS NOT NULL)"))
 }
 
 model tenants {

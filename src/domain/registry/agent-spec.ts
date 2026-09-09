@@ -47,7 +47,41 @@ export const agentSpecSchema = z
      * The schema enforces it structurally through a composite foreign key, so this is a
      * convenience check rather than the control.
      */
-    subAgents: z.array(z.string().min(1)).max(16).default([]),
+    subAgents: z
+      .array(
+        z.union([
+          // A bare name still means the §13.3 default: a separate run.
+          z.string().min(1),
+          z.object({
+            name: z.string().min(1),
+            /**
+             * How the sub-agent executes.
+             *
+             * `run` (default) — a SEPARATE run: its own lifecycle, checkpoints, retries,
+             * budget ceiling and dead-lettering, and the caller suspends to `waiting`
+             * until it settles. This is §13.3 as written.
+             *
+             * `inline` — the child reasons INSIDE this run, as a DeepAgents sub-agent
+             * with its own prompt, model and tools resolved from its own version. It gets
+             * a fresh context window and returns in milliseconds instead of a queue round
+             * trip. What it gives up is everything that lives on a run row: no separate
+             * budget ceiling of its own beyond the one checked here, no retries, no
+             * dead-letter, and its failure returns to the caller's reasoning rather than
+             * becoming a run someone can inspect and resume.
+             *
+             * Choose `inline` for a fast, well-scoped stage whose cost is bounded by its
+             * caller's. Choose `run` when the stage needs to be governed, retried or
+             * operated on its own terms.
+             */
+            mode: z.enum(['run', 'inline']).default('run'),
+          }),
+        ]),
+      )
+      .max(16)
+      .default([])
+      .transform((entries) =>
+        entries.map((e) => (typeof e === 'string' ? { name: e, mode: 'run' as const } : e)),
+      ),
 
     /**
      * Skills by ref: `name` for the highest active version, or `name@3` to pin.

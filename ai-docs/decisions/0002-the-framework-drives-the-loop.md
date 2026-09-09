@@ -87,23 +87,41 @@ about that.
 Two things the plan proposed to merge, and that working through them said to keep apart —
 though the first only after a correction.
 
-**Sub-agents are two different things, so there are two.** A registered sub-agent has its
-own `AgentVersion` — own model, own tools, own policy, own budget ceiling. Run in-process
-it would silently use the *caller's* model and tool grants, so a cheap classifier stage
-would quietly run on the expensive model. That is why `subAgents` always becomes a separate
-run (`delegate_to_<alias>`), and why consumer 02's six pipeline stages keep their per-stage
-governance.
+**Sub-agents: three shapes, and the author picks.** The first draft of this ADR claimed a
+registered sub-agent could not run in-process because it would "silently use the caller's
+model and tool grants". That was **wrong on the facts** — DeepAgents' `SubAgent` takes both
+`model` and `tools` per sub-agent. The objection did not survive checking, so the feature
+was built.
 
-That argument rules out *that mapping*, not the feature. So `inlineSubAgents` was added:
-a name, a description, a prompt and a narrower slice of the caller's own tools, declared to
-`createDeepAgent` as real DeepAgents sub-agents and reached through `task`. They inherit the
-model, the host, the ledger and the step ceiling deliberately — a helper is the same agent
-thinking in a fresh context, and letting one buy its own model or its own step budget would
-make both ceilings meaningless. Their whole value is the clean context window: a forty-call
-research detour that does not sit in the main transcript for the rest of the run.
+| | `task` → inline helper | `task` → `mode: 'inline'` | `delegate_to_<alias>` |
+|---|---|---|---|
+| Declared as | `inlineSubAgents` | `subAgents: [{name, mode:'inline'}]` | `subAgents: ['name']` (default) |
+| Registered agent | no | **yes** | yes |
+| Prompt / tools / model | caller's, narrowed | **the child's own** | the child's own |
+| Own policy | n/a — no version | applied at ITS admission | applied at its admission |
+| Runs in | caller's run | caller's run | **its own run** |
+| Step ceiling, lease, signal | caller's | caller's | its own |
+| Cost ceiling | caller's | tighter of the two | its own |
+| Attribution | caller's version | `steps.agent_version_id` | its own run |
+| Retries, dead-letter, inspectable run | no | **no** | yes |
+| Cost of a hand-off | none | none | a queue round trip |
 
-The `tools` list **narrows and never grants**. A name the caller does not have is dropped,
-and would be refused at execution anyway.
+`mode: 'inline'` is the opt-in. Everything the child uses is its own — pinned prompt, own
+bindings, own model and residency class, own skills under `/agents/<alias>/skills/` — because
+`RunHost.forSubAgent(alias)` hands the adapter a host scoped to the child's version. What it
+shares is the run: the same lease, step ceiling and cancellation signal, and the **tighter**
+of the two cost ceilings, so a generous stage cannot overspend a frugal caller.
+
+What it gives up is everything that lives on a run row: **no retries, no dead-lettering, and
+no run for an operator to inspect or resume.** A failure returns into the caller's reasoning
+(§13.5 containment) instead of becoming something someone can go and look at. That is the
+trade the author makes by writing `mode: 'inline'`, and it is why `run` stays the default —
+including for a binding the spec forgot to name, and for one whose agent will not resolve.
+
+Two smaller rules fall out. An inline binding is reached through `task` and gets **no**
+`delegate_to_` handle: offering both would let the model choose a semantics it cannot reason
+about. And an inline child cannot itself spawn inline children — unbounded nesting inside one
+run, with no delegation chain for §4.6 to check against.
 
 **`pipeline.adapter.ts` stays.** It was slated for deletion. It is the only *deterministic*
 orchestrator, and a six-stage pipeline is precisely the case where the model must not

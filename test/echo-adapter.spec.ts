@@ -41,6 +41,10 @@ class FakeHost implements RunHost {
   saveState(state: unknown) {
     this.saved = state;
   }
+  /** The echo adapter has no in-process sub-agents; the port still requires the method. */
+  forSubAgent(): RunHost | null {
+    return null;
+  }
 }
 
 const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
@@ -141,8 +145,8 @@ describe('echo adapter — §0.3 second orchestration adapter', () => {
 describe('pipeline adapter — a framework with no checkpointer of its own', () => {
   const stages = spec({
     subAgents: [
-      { alias: 'intent', description: null },
-      { alias: 'draft', description: null },
+      { alias: 'intent', description: null, mode: 'run' as const, inline: null },
+      { alias: 'draft', description: null, mode: 'run' as const, inline: null },
     ],
   });
 

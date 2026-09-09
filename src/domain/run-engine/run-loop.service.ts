@@ -63,6 +63,18 @@ interface Observation {
  * the run itself -- so ignoring both only wastes the framework's time, never the
  * platform's ceiling.
  */
+/**
+ * The lower of two ceilings, treating null as "no ceiling of its own".
+ *
+ * A sub-agent running inside its caller's run is bound by BOTH budgets, and the tighter
+ * one wins. Taking the child's alone would let a generous stage overspend a frugal
+ * caller; taking the caller's alone would ignore a limit its author wrote down.
+ */
+function tightest(a: string | null, b: string | null): number | null {
+  const values = [a, b].filter((v): v is string => v !== null).map(Number);
+  return values.length ? Math.min(...values) : null;
+}
+
 class RunStopped extends Error {
   constructor(readonly detail: string) {
     super(detail);
@@ -274,7 +286,14 @@ export class RunLoop {
       };
     }
 
-    const host = this.makeHost(run, version, lease, bindings, subAgents, restored?.stepSeq ?? 0);
+    // Resolved before the framework starts, because an inline sub-agent's prompt, model
+    // and tools have to be in the tool set it is handed -- there is no later point to
+    // discover them.
+    const inlineAgents = await this.resolveInline(subAgents);
+
+    const host = this.makeHost(
+      run, version, lease, bindings, subAgents, inlineAgents, restored?.stepSeq ?? 0,
+    );
 
     const outcome = await adapter.run({
       runId: run.id,
@@ -295,7 +314,34 @@ export class RunLoop {
           instructions: sk.instructions,
         })),
         knowledge,
-        subAgents: subAgents.map((a) => ({ alias: a.alias, description: a.description })),
+        subAgents: subAgents.map((a) => {
+          const child = inlineAgents.get(a.alias);
+          return {
+            alias: a.alias,
+            description: a.description,
+            // An inline binding whose agent would not resolve falls back to `run`: the
+            // handle stays usable and takes the slower, fully governed path, which is a
+            // better failure than the handle disappearing.
+            mode: child ? a.mode : ('run' as const),
+            inline: child
+              ? {
+                  agentVersionId: child.version.id,
+                  systemPrompt: child.version.systemPrompt,
+                  tools: child.bindings.map((b) => ({
+                    ref: b.ref,
+                    description: b.description,
+                    inputSchema: b.inputSchema,
+                  })),
+                  skills: child.version.skills.map((sk) => ({
+                    name: sk.name,
+                    version: sk.version,
+                    whenToUse: sk.whenToUse,
+                    instructions: sk.instructions,
+                  })),
+                }
+              : null,
+          };
+        }),
         peers: version.peers.map((p) => ({ alias: p.alias, description: null })),
         inlineSubAgents: version.inlineSubAgents,
         harness: version.harness,
@@ -344,10 +390,20 @@ export class RunLoop {
     version: ResolvedVersion,
     lease: Lease,
     bindings: ToolBinding[],
-    subAgents: { alias: string; sub_agent_id: string }[],
+    subAgents: { alias: string; sub_agent_id: string; mode: 'run' | 'inline' }[],
+    inlineAgents: Map<string, { version: ResolvedVersion; bindings: ToolBinding[] }>,
     fromStep: number,
   ) {
     const controller = new AbortController();
+
+    /**
+     * State that belongs to the RUN, not to whichever agent is currently reasoning.
+     *
+     * The step ceiling, the spend, the lease and the cancellation signal are all
+     * properties of the run row, so an in-process sub-agent shares every one of them. A
+     * child that could buy its own step budget would make the caller's ceiling
+     * meaningless -- spawn a helper, get another fifty steps.
+     */
     const host = {
       signal: controller.signal,
       stepSeq: fromStep,
@@ -378,14 +434,20 @@ export class RunLoop {
        * except through the two methods below, and both call this first. A framework that
        * loops without doing either spends nothing, which is the only case this no longer
        * catches -- and there is nothing to catch.
+       *
+       * `acting` is whichever version is currently reasoning: the run's own, or an
+       * in-process sub-agent's. Its ceiling is checked IN ADDITION to the run's, never
+       * instead of it, so a cheap stage cannot be given a bigger allowance than the run
+       * that called it.
        */
-      guard: async (): Promise<void> => {
+      guard: async (acting: ResolvedVersion): Promise<void> => {
         if (host.stopped) throw new RunStopped(host.stopped);
         if (host.stepSeq >= version.maxSteps) {
           host.stop(`Exceeded maxSteps (${version.maxSteps})`);
         }
-        if (version.maxCostMicros !== null && host.costMicros >= Number(version.maxCostMicros)) {
-          host.stop(`Exceeded maxCost (${version.maxCostMicros} micros)`);
+        const ceiling = tightest(version.maxCostMicros, acting.maxCostMicros);
+        if (ceiling !== null && host.costMicros >= ceiling) {
+          host.stop(`Exceeded maxCost (${ceiling} micros)`);
         }
         // §5.2: the per-version ceiling above is this run's own budget; these are the
         // tenancy levels ABOVE it. Checked every step, not only at admission, because
@@ -400,9 +462,10 @@ export class RunLoop {
 
       /** Runs one step inside its own transaction, fenced, and settles the bookkeeping. */
       step: async <T>(
+        acting: ResolvedVersion,
         fn: (tx: Tx, stepSeq: number) => Promise<{ result: T; costMicros: number; seq: number | null }>,
       ): Promise<T> => {
-        await host.guard();
+        await host.guard(acting);
         const stepSeq = host.stepSeq + 1;
         const out = await this.uow.run(async (tx) => {
           // Fencing, in the same transaction as every durable write that follows.
@@ -421,28 +484,40 @@ export class RunLoop {
       },
     };
 
-    // Assigned onto `host` rather than returned as a second object. `Object.assign` copies
-    // PRIMITIVES BY VALUE, so a merged pair would give the caller a frozen snapshot of
-    // `stepSeq`, `stopped` and `suspended` taken before the run began -- and the stop check
-    // in `drive()` would then read `null` forever, turning an exceeded budget into a
-    // completed run. One object, one identity.
-    const api: Omit<RunHost, never> = {
+    /**
+     * The `RunHost` surface for ONE agent version.
+     *
+     * Called once for the run's own version, and once more per in-process sub-agent. Each
+     * façade carries its own version and bindings -- so the child's model, residency
+     * class, prompt version, cache policy and tool set are the child's -- while sharing
+     * the counters above, which belong to the run.
+     *
+     * `attribute` is what keeps the books honest: every step the child writes records
+     * WHOSE work it was, and without it the child's spend lands on the caller's version
+     * where no eval or cost report could separate them.
+     */
+    const facade = (
+      acting: ResolvedVersion,
+      actingBindings: ToolBinding[],
+      attribute: string | null,
+    ): RunHost => ({
       saveState: (state) => {
         host.frameworkState = state;
       },
 
       callModel: (request: HostModelRequest) =>
-        host.step(async (tx, stepSeq) => {
+        host.step(acting, async (tx, stepSeq) => {
           const r = await this.runModelStep(
-            tx, run, version, lease, stepSeq, request, bindings, host.frameworkState,
+            tx, run, acting, lease, stepSeq, request, actingBindings, host.frameworkState, attribute,
           );
           return { result: r.result, costMicros: r.costMicros, seq: r.seq };
         }),
 
       callTool: (toolRef, args) =>
-        host.step(async (tx, stepSeq) => {
+        host.step(acting, async (tx, stepSeq) => {
           const r = await this.runToolStep(
-            tx, run, version, lease, stepSeq, { toolRef, args }, bindings, host.frameworkState,
+            tx, run, acting, lease, stepSeq, { toolRef, args }, actingBindings,
+            host.frameworkState, attribute,
           );
           if (r.kind === 'halt') host.suspended = true;
           return {
@@ -456,7 +531,7 @@ export class RunLoop {
         }),
 
       delegate: (alias, input) =>
-        host.step(async (tx, stepSeq) => {
+        host.step(acting, async (tx, stepSeq) => {
           const r = await this.runDelegationStep(
             tx, run, version, lease, stepSeq, { alias, input }, subAgents, host.frameworkState,
           );
@@ -472,7 +547,7 @@ export class RunLoop {
         }),
 
       peerCall: (alias, input) =>
-        host.step(async (tx, stepSeq) => {
+        host.step(acting, async (tx, stepSeq) => {
           const r = await this.runPeerCallStep(
             tx, run, version, lease, stepSeq, { alias, input }, host.frameworkState,
           );
@@ -486,9 +561,23 @@ export class RunLoop {
             seq: r.kind === 'halt' ? null : r.seq,
           };
         }),
-    };
 
-    Object.assign(host, api);
+      forSubAgent: (alias) => {
+        const child = inlineAgents.get(alias);
+        // Null rather than a caller-scoped fallback. Silently running the CALLER as the
+        // child would produce a plausible answer from the wrong agent, which is worse
+        // than the framework finding the handle absent.
+        if (!child) return null;
+        return facade(child.version, child.bindings, child.version.id);
+      },
+    });
+
+    // Assigned onto `host` rather than returned as a second object. `Object.assign` copies
+    // PRIMITIVES BY VALUE, so a merged pair would give the caller a frozen snapshot of
+    // `stepSeq`, `stopped` and `suspended` taken before the run began -- and the stop check
+    // in `drive()` would then read `null` forever, turning an exceeded budget into a
+    // completed run. One object, one identity.
+    Object.assign(host, facade(version, bindings, null));
     return host as typeof host & RunHost;
   }
 
@@ -804,14 +893,51 @@ export class RunLoop {
       .execute();
 
     const byAlias = new Map(bound.map((b) => [b.alias, b]));
+    const modeOf = new Map(version.subAgents.map((sa) => [sa.name, sa.mode]));
     const ordered = version.subAgents
-      .map((alias) => byAlias.get(alias))
+      .map((sa) => byAlias.get(sa.name))
       .filter((b): b is (typeof bound)[number] => b !== undefined);
 
     // Anything bound but not named in the spec still runs last rather than vanishing --
     // a binding the spec forgot is a bug worth seeing, not one worth hiding.
     const named = new Set(ordered.map((b) => b.alias));
-    return [...ordered, ...bound.filter((b) => !named.has(b.alias))];
+    return [...ordered, ...bound.filter((b) => !named.has(b.alias))].map((b) => ({
+      ...b,
+      // Default `run`, including for a binding the spec forgot: §13.3's separate-run
+      // semantics are the safe answer, and inheriting `inline` by accident would put an
+      // unnamed agent inside the caller's process.
+      mode: modeOf.get(b.alias) ?? ('run' as const),
+    }));
+  }
+
+  /**
+   * Resolves an `inline` sub-agent to what the registry says it is.
+   *
+   * Deployment-routed like a real delegation (§15.5), so an inline stage follows the same
+   * promotion and canary decisions as one that runs on its own. The alternative -- pinning
+   * whatever version was current when the caller was registered -- would make `inline` a
+   * quiet way to escape a rollback.
+   */
+  private async resolveInline(
+    subAgents: { alias: string; sub_agent_id: string; mode: 'run' | 'inline' }[],
+  ): Promise<Map<string, { version: ResolvedVersion; bindings: ToolBinding[] }>> {
+    const resolved = new Map<string, { version: ResolvedVersion; bindings: ToolBinding[] }>();
+
+    for (const sa of subAgents.filter((s) => s.mode === 'inline')) {
+      try {
+        const { versionId } = await this.agents.currentVersionId(sa.sub_agent_id);
+        resolved.set(sa.alias, {
+          version: await this.versions.load(this.db, versionId),
+          bindings: await this.tools.bindingsFor(versionId),
+        });
+      } catch (e) {
+        // Not fatal to the caller. An undeployed sub-agent means that handle is simply
+        // absent from the framework's tool set, which the model can work around -- the
+        // same outcome as a sub-agent it was never given.
+        this.log.warn(`inline sub-agent "${sa.alias}" is not resolvable: ${(e as Error).message}`);
+      }
+    }
+    return resolved;
   }
 
   /**
@@ -1299,16 +1425,19 @@ export class RunLoop {
     request: HostModelRequest,
     bindings: ToolBinding[] = [],
     frameworkState: unknown = null,
+    /** Set when an in-process sub-agent did this work, so the spend is attributed to it. */
+    actingVersionId: string | null = null,
   ): Promise<{ result: HostModelResult; costMicros: number; seq: number }> {
     const startedAt = Date.now();
     // The LAST turn is what the step row records as its input. The full transcript is
     // already reconstructible from the preceding steps, and copying it into every step
     // would make `steps.input` grow quadratically in the length of the run.
     const asked = request.messages[request.messages.length - 1]?.content ?? '';
-    const step = await this.openStep(tx, run, stepSeq, 'model_call', {
-      prompt: asked,
-      turns: request.messages.length,
-    });
+    const step = await this.openStep(
+      tx, run, stepSeq, 'model_call',
+      { prompt: asked, turns: request.messages.length },
+      actingVersionId,
+    );
 
     const result = await this.gateway.complete({
       tx,
@@ -1445,16 +1574,19 @@ export class RunLoop {
     action: { toolRef: string; args: Record<string, unknown> },
     bindings: ToolBinding[],
     frameworkState: unknown = null,
+    /** Set when an in-process sub-agent did this work, so the call is attributed to it. */
+    actingVersionId: string | null = null,
   ): Promise<
     | { kind: 'continue'; outcome: HostToolOutcome; seq: number }
     | { kind: 'halt' }
   > {
     const startedAt = Date.now();
     const binding = bindings.find((b) => b.ref === action.toolRef);
-    const step = await this.openStep(tx, run, stepSeq, 'tool_call', {
-      toolRef: action.toolRef,
-      args: action.args,
-    });
+    const step = await this.openStep(
+      tx, run, stepSeq, 'tool_call',
+      { toolRef: action.toolRef, args: action.args },
+      actingVersionId,
+    );
 
     if (!binding) {
       // Not a silent skip. A model told a tool exists must not find it quietly absent,
@@ -1561,12 +1693,21 @@ export class RunLoop {
     seq: number,
     kind: 'model_call' | 'tool_call' | 'delegation' | 'peer_call',
     input: Record<string, unknown>,
+    /**
+     * Whose work this was, when it was not the run's own version.
+     *
+     * NULL is the overwhelmingly common case and means "the run's version", so nothing
+     * had to be backfilled. It is only set for an in-process sub-agent (§13.3), which is
+     * the one situation where a run contains more than one agent's reasoning.
+     */
+    actingVersionId: string | null = null,
   ) {
     return tx
       .insertInto('steps')
       .values({
         run_id: run.id,
         seq,
+        agent_version_id: actingVersionId,
         kind,
         status: 'running',
         org_id: run.org_id,

@@ -48,7 +48,7 @@ export interface ResolvedVersion {
     recallLimit: number;
     retentionSeconds: number | null;
   };
-  subAgents: string[];
+  subAgents: { name: string; mode: 'run' | 'inline' }[];
   /** Pinned skill versions, in spec order. Loaded from the pin table, not the spec blob. */
   skills: {
     skillVersionId: string;
@@ -441,7 +441,7 @@ export class AgentVersionService {
       framework?: string;
       systemPrompt?: string | null;
       memory?: { enabled?: boolean; tiers?: string[]; recallLimit?: number; retentionSeconds?: number | null };
-      subAgents?: string[];
+      subAgents?: { name: string; mode: 'run' | 'inline' }[];
       knowledge?: { collections?: string[]; recallLimit?: number };
       cache?: { modelResponses?: boolean; ttlSeconds?: number };
       context?: { maxChars?: number; reserveForAnswer?: number; compaction?: boolean; eviction?: boolean };

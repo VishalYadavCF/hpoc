@@ -128,7 +128,10 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
       // budget and step ceiling, because that is what makes them helpers rather than
       // agents. A registered sub-agent -- own version, own policy, own budget -- is
       // `delegate_to_<alias>` instead, and is a separate run.
-      subagents: inlineSubAgentsFor(session, backend, boundTools),
+      subagents: [
+        ...inlineSubAgentsFor(session, backend, boundTools),
+        ...registeredInlineFor(session, backend, ledger),
+      ],
       systemPrompt: {
         base: spec.systemPrompt ?? undefined,
         ...(profile.systemPromptSuffix ? { suffix: profile.systemPromptSuffix } : {}),
@@ -279,7 +282,12 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
       ),
     );
 
-    const delegates = spec.subAgents.map((a) =>
+    const delegates = spec.subAgents
+      // An `inline` binding is reached through `task`, not through a delegation handle.
+      // Offering both would let the model pick a semantics it has no way to reason about,
+      // and the two differ in retries, budget and whether a run exists to inspect.
+      .filter((a) => a.mode === 'run')
+      .map((a) =>
       tool(
         async (args: { input?: unknown }, runtime: { toolCallId?: string }) =>
           settle(
@@ -376,6 +384,85 @@ function inlineSubAgentsFor(
       ...(skills.length ? { skills } : {}),
     };
   });
+}
+
+/**
+ * Registered sub-agents bound with `mode: 'inline'`, as DeepAgents sub-agents.
+ *
+ * This is the opt-in that lets a real, registry-governed agent reason INSIDE its caller's
+ * run instead of as a separate one. Everything it uses is its own: its pinned system
+ * prompt, its own bound tools, its own model and residency class, its own skills. What it
+ * shares is the run — the same lease, step ceiling, cancellation signal and
+ * `runs.cost_micros`.
+ *
+ * The scoped host is what makes that true rather than aspirational. `host.forSubAgent`
+ * returns a `RunHost` bound to the child's version, so its model call goes through the
+ * child's model and its tool calls resolve against the child's bindings — and every step
+ * row it writes carries `agent_version_id`, so the spend is attributable afterwards.
+ *
+ * ## What `inline` gives up, stated plainly
+ *
+ * No run row means no retries, no dead-lettering, and nothing an operator can inspect or
+ * resume on its own. A failure returns into the caller's reasoning (§13.5 containment)
+ * rather than becoming a run someone can go and look at. That is the trade the author
+ * makes by writing `mode: 'inline'`, and it is why `run` remains the default.
+ */
+function registeredInlineFor(
+  session: RunSession,
+  backend: PlatformBackend,
+  ledger: ReplayLedger,
+): SubAgent[] {
+  const agents: SubAgent[] = [];
+
+  for (const binding of session.spec.subAgents) {
+    if (binding.mode !== 'inline' || !binding.inline) continue;
+
+    // A host scoped to the CHILD. Null would mean the platform could not resolve it, and
+    // the platform has already downgraded that case to `run`, so this is defensive.
+    const childHost = session.host.forSubAgent(binding.alias);
+    if (!childHost) continue;
+
+    const child = binding.inline;
+    agents.push({
+      name: handleName('agent', binding.alias),
+      description:
+        binding.description ?? `The "${binding.alias}" agent. Hand it a self-contained task.`,
+      // The child's OWN prompt, from its own pinned prompt version. Handing it the
+      // caller's would be running a different agent under its name.
+      systemPrompt: child.systemPrompt ?? `You are the "${binding.alias}" agent.`,
+      // The child's OWN model, reached through a host scoped to the child's version -- so
+      // the residency gate, cost ledger and cache policy that apply are the child's.
+      model: new HostChatModel(childHost),
+      // The child's OWN tools, executed through the child's host, so its capability grants
+      // apply rather than the caller's. This is the part that would be wrong if the child
+      // simply borrowed the caller's tool list.
+      tools: child.tools.map((t) =>
+        tool(
+          async (args: Record<string, unknown>, runtime: { toolCallId?: string }) =>
+            settle(
+              ledger,
+              childHost,
+              t.ref,
+              runtime?.toolCallId,
+              () => childHost.callTool(t.ref, args),
+              `tool ${t.ref} (${binding.alias})`,
+            ),
+          {
+            name: t.ref,
+            description: t.description ?? `Invoke ${t.ref}`,
+            schema: (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
+          },
+        ),
+      ) as unknown as StructuredTool[],
+      // The child's own pinned skills, under its own prefix. DeepAgents sub-agents do not
+      // inherit the parent's, and a child running without the procedures its author
+      // pinned to it fails by producing plausible answers.
+      ...(child.skills.length
+        ? { skills: backend.seedSubAgentSkills(binding.alias, child.skills) }
+        : {}),
+    });
+  }
+  return agents;
 }
 
 /**

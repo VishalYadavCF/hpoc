@@ -873,6 +873,9 @@ CREATE TABLE steps (
     id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id             uuid NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     seq                integer NOT NULL,
+    -- Which agent version did the work. NULL means the run's own version, which is every
+    -- step until an in-process sub-agent (§13.3) reasons inside its caller's run.
+    agent_version_id   uuid REFERENCES agent_versions(id),
     parent_step_id     uuid REFERENCES steps(id) ON DELETE SET NULL,
     kind               step_kind NOT NULL,
     status             step_status NOT NULL DEFAULT 'pending',
@@ -910,6 +913,8 @@ CREATE TABLE steps (
 );
 CREATE INDEX steps_run_idx    ON steps (run_id, seq);
 CREATE INDEX steps_status_idx ON steps (status) WHERE status IN ('pending','running');
+-- Attribution: "all steps this agent version did", across runs it did not own.
+CREATE INDEX steps_agent_version_idx ON steps (agent_version_id) WHERE agent_version_id IS NOT NULL;
 
 -- §8.1 one row per tool execution regardless of origin, with the effect
 -- contract snapshotted as it was at invocation time.
