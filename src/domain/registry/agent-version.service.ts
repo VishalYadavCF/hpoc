@@ -26,6 +26,8 @@ function bindingFor(agentVersionId: string, tool: AdmittedTool) {
     cache_scope: has('cacheable') ? 'tenant' : null,
     idempotency_key_tpl: has('idempotent') ? '${runId}:${stepId}' : null,
     compensation_tool_id: null,
+    // Bound at admission, applied after the model answers, hidden from the schema it saw.
+    fixed_args: JSON.stringify(tool.fixedArgs ?? {}),
   };
 }
 

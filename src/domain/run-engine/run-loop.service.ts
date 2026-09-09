@@ -75,6 +75,35 @@ function tightest(a: string | null, b: string | null): number | null {
   return values.length ? Math.min(...values) : null;
 }
 
+/**
+ * The argument schema with bound fields removed (§18.5).
+ *
+ * A `fixed` argument is decided by the workflow author, and the platform merges it in
+ * after the model answers. Showing it to the model anyway would be worse than pointless:
+ * the model would spend tokens reasoning about a value it cannot influence, and might
+ * contradict it in its prose while the call quietly used the pinned one.
+ *
+ * `required` is filtered too, or a provider doing strict schema validation refuses a call
+ * for omitting a field the model was told it must send and then never shown.
+ */
+function withoutFixed(schema: unknown, fixed: Record<string, unknown>): Record<string, unknown> {
+  const base = (schema as Record<string, unknown>) ?? { type: 'object' };
+  const names = Object.keys(fixed);
+  if (names.length === 0) return base;
+
+  const properties = base['properties'] as Record<string, unknown> | undefined;
+  const required = base['required'] as string[] | undefined;
+  return {
+    ...base,
+    ...(properties
+      ? { properties: Object.fromEntries(
+            Object.entries(properties).filter(([k]) => !names.includes(k)),
+          ) }
+      : {}),
+    ...(required ? { required: required.filter((k) => !names.includes(k)) } : {}),
+  };
+}
+
 class RunStopped extends Error {
   constructor(readonly detail: string) {
     super(detail);
@@ -303,7 +332,7 @@ export class RunLoop {
         tools: bindings.map((b) => ({
           ref: b.ref,
           description: b.description,
-          inputSchema: b.inputSchema,
+          inputSchema: withoutFixed(b.inputSchema, b.fixedArgs),
         })),
         maxSteps: version.maxSteps,
         recalled,
@@ -330,7 +359,7 @@ export class RunLoop {
                   tools: child.bindings.map((b) => ({
                     ref: b.ref,
                     description: b.description,
-                    inputSchema: b.inputSchema,
+                    inputSchema: withoutFixed(b.inputSchema, b.fixedArgs),
                   })),
                   skills: child.version.skills.map((sk) => ({
                     name: sk.name,
@@ -1461,7 +1490,7 @@ export class RunLoop {
                 tools: bindings.map((b) => ({
                   name: b.ref,
                   description: b.description ?? `Invoke ${b.ref}`,
-                  parameters: (b.inputSchema as Record<string, unknown>) ?? { type: 'object' },
+                  parameters: withoutFixed(b.inputSchema, b.fixedArgs),
                 })),
               }
             : {}),

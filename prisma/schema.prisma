@@ -82,6 +82,7 @@ model agent_version_tools {
   cache_scope                                           String?
   idempotency_key_tpl                                   String?
   compensation_tool_id                                  String?        @db.Uuid
+  fixed_args                                            Json           @default("{}")
   agent_versions                                        agent_versions @relation(fields: [agent_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   tools_agent_version_tools_compensation_tool_idTotools tools?         @relation("agent_version_tools_compensation_tool_idTotools", fields: [compensation_tool_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   tools_agent_version_tools_tool_idTotools              tools          @relation("agent_version_tools_tool_idTotools", fields: [tool_id], references: [id], onUpdate: NoAction)
@@ -783,6 +784,7 @@ model namespaces {
   tenants                 tenants[]
   threads                 threads[]
   tool_invocations        tool_invocations[]
+  tool_templates          tool_templates[]
   tools                   tools[]
 
   @@unique([id, org_id])
@@ -831,6 +833,7 @@ model orgs {
   tenants                     tenants[]
   threads                     threads[]
   tool_invocations            tool_invocations[]
+  tool_templates              tool_templates[]
   tools                       tools[]
 }
 
@@ -1308,6 +1311,8 @@ model tools {
   static_headers                                                      Json                  @default("{}")
   code_runtime                                                        String?
   code_source                                                         String?
+  template_id                                                         String?               @db.Uuid
+  spec_hash                                                           String?
   agent_version_tools_agent_version_tools_compensation_tool_idTotools agent_version_tools[] @relation("agent_version_tools_compensation_tool_idTotools")
   agent_version_tools_agent_version_tools_tool_idTotools              agent_version_tools[] @relation("agent_version_tools_tool_idTotools")
   skill_version_tools                                                 skill_version_tools[]
@@ -1315,8 +1320,10 @@ model tools {
   mcp_servers                                                         mcp_servers?          @relation(fields: [mcp_server_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   namespaces                                                          namespaces            @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
   orgs                                                                orgs                  @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  tool_templates                                                      tool_templates?       @relation(fields: [template_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([org_id, ref, version])
+  @@unique([org_id, spec_hash], map: "tools_instantiated_hash_idx", where: raw("(spec_hash IS NOT NULL)"))
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -1628,6 +1635,35 @@ model trace_export_cursor {
   id               Boolean  @id @default(true)
   exported_through DateTime @db.Timestamptz(6)
   updated_at       DateTime @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model tool_templates {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id          String          @db.Uuid
+  namespace_id    String          @db.Uuid
+  ref             String          @db.Citext
+  version         Int             @default(1)
+  description     String?
+  default_effects effect_class[]
+  residency       residency
+  sandbox_profile String
+  timeout_ms      Int             @default(30000)
+  max_retries     Int             @default(0) @db.SmallInt
+  endpoint_url    String
+  allowed_methods String[]        @default(["POST"])
+  path_prefix     String
+  static_headers  Json            @default("{}")
+  max_instances   Int             @default(32)
+  status          registry_status @default(active)
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
+  namespaces      namespaces      @relation(fields: [namespace_id], references: [id], onUpdate: NoAction)
+  orgs            orgs            @relation(fields: [org_id], references: [id], onUpdate: NoAction)
+  tools           tools[]
+
+  @@unique([org_id, ref, version])
+  @@index([org_id, ref], map: "tool_templates_ref_idx", where: raw("(status = 'active'::registry_status)"))
 }
 
 enum agent_lifetime {

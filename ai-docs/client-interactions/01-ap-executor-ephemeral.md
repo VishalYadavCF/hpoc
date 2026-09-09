@@ -98,7 +98,37 @@ decided_at)` is the index that detects it.
 
 ## Effect contracts
 
-The node's tools are Relay pieces, so contracts are declared per piece action at registration:
+> **Corrected 2026-09-10.** This section originally said contracts are "declared per piece
+> action at registration", which assumed a registration step that does not exist. The node
+> lets a workflow author pick any piece and action inline, with no registration — and
+> `AgentSpec.tools` was refs-only, so there was no path for it at all. That made the
+> ephemeral path unusable by the consumer it was designed for.
+>
+> Closed by **tool templates** (§18.5, migration 0028). An operator registers one
+> `relay.piece` template — fixed origin, path prefix, method set, and the effect contract —
+> and grants it. The node then defines tools inline against it:
+>
+> ```json
+> { "template": "relay.piece",
+>   "name": "piece.slack_send_message",
+>   "description": "Send a Slack message",
+>   "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } } },
+>   "pathTemplate": "/v1/pieces/slack/send-message",
+>   "fixedArgs": { "channel": "#ops-alerts" } }
+> ```
+>
+> The spec supplies the SHAPE; the template supplies the CONTRACT. A caller cannot declare
+> its own effects — a payment tool self-declared `readOnly` would skip its approval gate,
+> be cached, and lose its idempotency key.
+>
+> `fixedArgs` is the `fixed` field mode: bound after the model answers and **stripped from
+> the schema the model sees**, so a pinned value cannot be argued with. `agent` mode is a
+> field left in the schema; `leave_empty` is a field omitted from both.
+>
+> Identical definitions are content-addressed onto one tool row, so a workflow running ten
+> thousand times does not produce ten thousand catalogue entries.
+
+The remaining registered-tool contracts are unchanged:
 
 ```yaml
 - ref: catalog.pieces.list      # discovery

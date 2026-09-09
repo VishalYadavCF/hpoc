@@ -22,6 +22,14 @@ export interface ToolBinding {
   definitionHash: string | null;
   idempotencyKeyTpl: string | null;
   cacheTtlSeconds: number | null;
+  /**
+   * Arguments the platform binds and the MODEL NEVER SEES (§18.5, ai-agent's `fixed`
+   * field mode).
+   *
+   * Merged over the model's arguments, not under them: a pinned value is the author's
+   * decision and a model that guessed the same key must not be able to override it.
+   */
+  fixedArgs: Record<string, unknown>;
   description: string | null;
   inputSchema: unknown;
   mcpServerId?: string | null;
@@ -68,7 +76,7 @@ export class ToolRuntime {
       .selectFrom('agent_version_tools as avt')
       .innerJoin('tools as t', 't.id', 'avt.tool_id')
       .select((eb) => [
-        'avt.tool_id', 'avt.idempotency_key_tpl', 'avt.cache_ttl_seconds',
+        'avt.tool_id', 'avt.idempotency_key_tpl', 'avt.cache_ttl_seconds', 'avt.fixed_args',
         't.ref', 't.origin', 't.version', 't.endpoint_url', 't.sandbox_profile',
         't.timeout_ms', 't.definition_hash', 't.description', 't.input_schema',
         't.http_method', 't.path_template', 't.arg_placement', 't.static_headers',
@@ -97,6 +105,7 @@ export class ToolRuntime {
       codeSource: r.code_source,
       definitionHash: r.definition_hash,
       idempotencyKeyTpl: r.idempotency_key_tpl,
+      fixedArgs: (r.fixed_args ?? {}) as Record<string, unknown>,
       cacheTtlSeconds: r.cache_ttl_seconds,
       description: r.description,
       inputSchema: r.input_schema,
@@ -148,6 +157,12 @@ export class ToolRuntime {
     approved?: boolean;
   }): Promise<ToolOutcome> {
     const { tx, binding } = args;
+
+    // Bound arguments applied BEFORE anything else reads the arguments, so the
+    // idempotency key, the cache key and the recorded request all describe the call that
+    // was actually made. Spread last: a pinned value is the author's decision, and a model
+    // that guessed the same key must not be able to override it (§18.5).
+    args = { ...args, toolArgs: { ...args.toolArgs, ...binding.fixedArgs } };
 
     // Gated before execution, not after: the Interaction IS the gate (§8.3, §14).
     if (has(binding.effects, 'human_approval_required') && !args.approved) {

@@ -3,7 +3,7 @@ import { sql } from 'kysely';
 import { DB } from '../../platform/persistence/tokens.js';
 import type { Db } from '../../platform/persistence/database.js';
 import type { EffectClass } from '../../platform/persistence/schema.types.js';
-import { agentSpecSchema, type AgentSpec } from '../registry/agent-spec.js';
+import { agentSpecSchema, type AgentSpec, type InlineToolSpec } from '../registry/agent-spec.js';
 import { SkillService, type ResolvedSkill } from '../skills/skill.service.js';
 import { PeerService, type ResolvedPeer } from '../peer/peer.service.js';
 import { PromptService, type ResolvedPrompt } from '../prompt/prompt.service.js';
@@ -24,6 +24,20 @@ export interface AdmittedTool {
   id: string;
   /** The tool's declared contract, carried through so the binding cannot invent one. */
   effects: EffectClass[];
+  /**
+   * Arguments the platform binds and the model never sees, from an inline definition's
+   * `fixedArgs`. Empty for a registered tool.
+   */
+  fixedArgs?: Record<string, unknown>;
+  /**
+   * The template this tool was instantiated from, when it was (§18.5).
+   *
+   * Its authority came from a grant on the TEMPLATE, checked at instantiation. Asking for
+   * a second grant on the resulting row would defeat the whole mechanism: the row did not
+   * exist when the grant was written, and granting each one individually is exactly the
+   * registration step inline definitions exist to remove.
+   */
+  viaTemplate?: string;
 }
 
 export interface AdmissionResult {
@@ -97,7 +111,17 @@ export class AdmissionService {
     else if (model.status !== 'active') rejections.push(`model.ref: "${spec.model.ref}" is ${model.status}`);
     checks['model'] = model ? 'ok' : 'missing';
 
-    const tools = spec.tools.length
+    // A spec's tools split two ways: refs to select, and inline definitions to
+    // instantiate (§18.5). Both end up as rows in `tools`; only the second creates one.
+    const toolRefs = spec.tools.filter((t): t is string => typeof t === 'string');
+    const inlineTools = spec.tools.filter((t): t is InlineToolSpec => typeof t !== 'string');
+
+    const { instantiated, rejections: inlineRejections } = inlineTools.length
+      ? await this.instantiate(input, inlineTools)
+      : { instantiated: [] as AdmittedTool[], rejections: [] as string[] };
+    rejections.push(...inlineRejections);
+
+    const tools = toolRefs.length
       ? await this.db
           .selectFrom('tools')
           // ::text[] deliberately: pg cannot parse a custom enum array OID and hands back
@@ -107,17 +131,17 @@ export class AdmissionService {
             sql<EffectClass[]>`default_effects::text[]`.as('default_effects'),
           ])
           .where('org_id', '=', input.orgId)
-          .where('ref', 'in', spec.tools)
+          .where('ref', 'in', toolRefs)
           .execute()
       : [];
 
     const found = new Map(tools.map((t) => [t.ref, t]));
-    for (const ref of spec.tools) {
+    for (const ref of toolRefs) {
       const tool = found.get(ref);
       if (!tool) rejections.push(`tools: "${ref}" is not in the tool registry`);
       else if (tool.status !== 'active') rejections.push(`tools: "${ref}" is ${tool.status}`);
     }
-    checks['tools'] = `${found.size}/${spec.tools.length}`;
+    checks['tools'] = `${found.size + instantiated.length}/${spec.tools.length}`;
 
     // Skills resolve to immutable versions HERE, once, so what gets stored on the agent
     // version is a version id rather than a name. Publishing skill v4 afterwards does not
@@ -152,9 +176,15 @@ export class AdmissionService {
     // directly-named ones at call time, so they must be indistinguishable at admission
     // time too -- otherwise "attach the skill" is a capability-laundering path around a
     // tool the caller was refused.
-    const admitted = new Map<string, AdmittedTool>(
-      [...found.values()].map((t) => [t.ref, { ref: t.ref, id: t.id, effects: t.default_effects }]),
-    );
+    const admitted = new Map<string, AdmittedTool>([
+      ...[...found.values()].map(
+        (t) => [t.ref, { ref: t.ref, id: t.id, effects: t.default_effects }] as const,
+      ),
+      // Instantiated tools join the same map, so everything downstream -- the grant check,
+      // the policy verdict, the binding -- treats them identically to a registered one.
+      // They are only different in where their row came from.
+      ...instantiated.map((t) => [t.ref, t] as const),
+    ]);
     for (const skill of skills) {
       for (const tool of skill.tools) {
         if (!admitted.has(tool.ref)) admitted.set(tool.ref, tool);
@@ -169,6 +199,9 @@ export class AdmissionService {
       if (!granted) rejections.push(`model.ref: no capability grant for "${spec.model.ref}"`);
     }
     for (const tool of admitted.values()) {
+      // An instantiated tool was authorised by its TEMPLATE's grant, already checked. The
+      // row is younger than any grant that could name it.
+      if (tool.viaTemplate) continue;
       const granted = await this.hasGrant(input, 'tool', tool.id);
       if (!granted) {
         // Named separately when it arrived through a skill: "no grant for payments.refund"
@@ -320,6 +353,213 @@ export class AdmissionService {
       policy,
       effectiveMaxCostMicros,
       policyApprovalRequired,
+    };
+  }
+
+  /**
+   * Turns inline tool definitions into rows, under a template the caller may use.
+   *
+   * ## The rule this method exists to enforce
+   *
+   * The spec supplies the SHAPE -- name, description, argument schema, path, placement.
+   * The template supplies the CONTRACT -- effects, residency, sandbox profile, timeout --
+   * and the origin. Nothing a caller writes can reach the second list.
+   *
+   * That is not fussiness. If a spec could declare its own effects it would mark a payment
+   * tool `read_only`, which skips the §14 approval gate, permits caching under §10, and
+   * removes the idempotency key §4.5 requires. Every control downstream reads the effect
+   * array and believes it.
+   *
+   * ## What is checked, and why each one matters
+   *
+   * - **The grant is on the TEMPLATE.** Same check, same table, same revocation path as a
+   *   tool grant; only the resource kind differs. Revoking it stops the next admission.
+   * - **The method is in the template's set.** A template that permits GET must not become
+   *   a DELETE by instantiation.
+   * - **The path sits under the prefix.** With `{name}` expanding to ONE percent-encoded
+   *   segment, an argument cannot add a segment the template did not declare -- so the
+   *   prefix holds at call time, not merely at admission.
+   * - **`fixedArgs` may not name a path variable.** Otherwise a pinned value silently
+   *   loses to the template expansion and the author believes something is bound that is
+   *   not.
+   * - **A count ceiling.** Four hundred tools in one context is an accuracy problem that
+   *   looks like a model problem.
+   */
+  private async instantiate(
+    input: AdmissionInput,
+    inline: InlineToolSpec[],
+  ): Promise<{ instantiated: AdmittedTool[]; rejections: string[] }> {
+    const rejections: string[] = [];
+    const instantiated: AdmittedTool[] = [];
+
+    const templates = await this.db
+      .selectFrom('tool_templates')
+      .select((eb) => [
+        'id', 'ref', 'version', 'status', 'endpoint_url', 'path_prefix',
+        'allowed_methods', 'residency', 'sandbox_profile', 'timeout_ms', 'max_retries',
+        'static_headers', 'max_instances', 'namespace_id',
+        // ::text[] deliberately, for the same reason as `tools` above: pg hands back the
+        // literal '{a,b}' for a custom enum array and Array methods silently do not exist.
+        sql<EffectClass[]>`default_effects::text[]`.as('default_effects'),
+      ])
+      .where('org_id', '=', input.orgId)
+      .where('namespace_id', '=', input.namespaceId)
+      .execute();
+
+    const perTemplate = new Map<string, number>();
+
+    for (const def of inline) {
+      const [ref, pinned] = def.template.split('@');
+      const candidates = templates.filter((t) => t.ref.toLowerCase() === ref!.toLowerCase());
+      const template = pinned
+        ? candidates.find((t) => t.version === Number(pinned))
+        : candidates.sort((a, b) => b.version - a.version)[0];
+
+      if (!template) {
+        rejections.push(`tools: no tool template "${def.template}" in this namespace`);
+        continue;
+      }
+      if (template.status !== 'active') {
+        rejections.push(`tools: tool template "${def.template}" is ${template.status}`);
+        continue;
+      }
+      if (!(await this.hasGrant(input, 'tool_template', template.id))) {
+        rejections.push(`tools: no capability grant for tool template "${template.ref}"`);
+        continue;
+      }
+
+      const used = (perTemplate.get(template.id) ?? 0) + 1;
+      perTemplate.set(template.id, used);
+      if (used > template.max_instances) {
+        rejections.push(
+          `tools: template "${template.ref}" allows ${template.max_instances} inline tools ` +
+            `per spec; this spec defines more`,
+        );
+        continue;
+      }
+
+      const method = def.method ?? (template.allowed_methods[0] as string);
+      if (!template.allowed_methods.includes(method)) {
+        rejections.push(
+          `tools: "${def.name}" uses ${method}, which template "${template.ref}" does not ` +
+            `allow (${template.allowed_methods.join(', ')})`,
+        );
+        continue;
+      }
+
+      const path = def.pathTemplate ?? template.path_prefix;
+      if (!path.startsWith(template.path_prefix)) {
+        rejections.push(
+          `tools: "${def.name}" targets "${path}", which is outside template ` +
+            `"${template.ref}"'s prefix "${template.path_prefix}"`,
+        );
+        continue;
+      }
+
+      const pathVars = [...path.matchAll(/\{\+?([^}]+)\}/g)].map((m) => m[1]!);
+      const clashing = Object.keys(def.fixedArgs).filter((k) => pathVars.includes(k));
+      if (clashing.length > 0) {
+        // Refused rather than resolved either way: the template expansion would win, and
+        // an author who pinned a value and saw it ignored has no way to find out.
+        rejections.push(
+          `tools: "${def.name}" fixes ${clashing.join(', ')}, which the path template also ` +
+            `expands. Fix it in the path or in fixedArgs, not both`,
+        );
+        continue;
+      }
+
+      if (rejections.length > 0) continue;
+
+      instantiated.push(await this.materialise(input, def, template, method, path));
+    }
+
+    return { instantiated, rejections };
+  }
+
+  /**
+   * Writes the instantiated tool row, or finds the one an identical spec already wrote.
+   *
+   * Content-addressed on the shape, so ap-executor issuing the same node configuration ten
+   * thousand times gets ONE row, one cache key and one line in the catalogue -- the same
+   * reasoning §18.1 applies to ephemeral agent versions, for the same cardinality reason.
+   *
+   * `version` is the next free one for this ref rather than part of the hash: the ref is
+   * what the MODEL sees, so two callers choosing the same name for different shapes must
+   * both keep the name they chose.
+   */
+  private async materialise(
+    input: AdmissionInput,
+    def: InlineToolSpec,
+    template: { id: string; endpoint_url: string; residency: 'internal' | 'external';
+                sandbox_profile: string; timeout_ms: number; max_retries: number;
+                static_headers: unknown; default_effects: EffectClass[] },
+    method: string,
+    path: string,
+  ): Promise<AdmittedTool> {
+    // The template's identity is IN the hash: the same shape under a different contract is
+    // a different tool, and collapsing them would let a re-pointed template silently
+    // inherit rows admitted under the old one.
+    const specHash = stableHash({
+      template: template.id,
+      name: def.name,
+      description: def.description,
+      schema: def.inputSchema,
+      method,
+      path,
+      placement: def.argPlacement,
+    });
+
+    const existing = await this.db
+      .selectFrom('tools')
+      .select('id')
+      .where('org_id', '=', input.orgId)
+      .where('spec_hash', '=', specHash)
+      .executeTakeFirst();
+
+    const id =
+      existing?.id ??
+      (
+        await this.db
+          .insertInto('tools')
+          .values({
+            org_id: input.orgId,
+            namespace_id: input.namespaceId,
+            ref: def.name,
+            version: sql<number>`(SELECT coalesce(max(version), 0) + 1 FROM tools
+                                   WHERE org_id = ${input.orgId} AND ref = ${def.name})`,
+            origin: 'http',
+            description: def.description,
+            input_schema: JSON.stringify(def.inputSchema),
+            // FROM THE TEMPLATE, every one of them. This block is the security boundary.
+            default_effects: sql`${template.default_effects}::effect_class[]`,
+            residency: template.residency,
+            sandbox_profile: template.sandbox_profile,
+            timeout_ms: template.timeout_ms,
+            max_retries: template.max_retries,
+            endpoint_url: template.endpoint_url,
+            static_headers: JSON.stringify(template.static_headers ?? {}),
+            // From the spec: the shape of the call, and nothing else.
+            http_method: method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+            path_template: path,
+            arg_placement: def.argPlacement,
+            template_id: template.id,
+            spec_hash: specHash,
+          })
+          .onConflict((oc) =>
+            // A concurrent admission of the identical shape. DO UPDATE rather than DO
+            // NOTHING so RETURNING yields a row either way.
+            oc.columns(['org_id', 'spec_hash']).doUpdateSet({ spec_hash: specHash }),
+          )
+          .returning('id')
+          .executeTakeFirstOrThrow()
+      ).id;
+
+    return {
+      ref: def.name,
+      id,
+      effects: template.default_effects,
+      fixedArgs: def.fixedArgs,
+      viaTemplate: template.id,
     };
   }
 

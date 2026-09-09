@@ -8,6 +8,58 @@ import { z } from 'zod';
  * definition, because that would bypass hash pinning and tenant approval. Servers are
  * referenced by registry id or not at all.
  */
+/**
+ * A tool defined in the spec rather than selected from the registry.
+ *
+ * Everything here describes the CALL. Nothing here describes the CONTRACT -- see the
+ * `tools` field for why that separation is the whole security argument.
+ */
+export const inlineToolSchema = z.object({
+  /**
+   * The template being instantiated, as `ref` or `ref@2`. The caller must hold a grant
+   * for it, exactly as it would for a tool.
+   */
+  template: z.string().min(1).max(200),
+  /**
+   * The name the MODEL sees, and the ref the invocation is recorded under.
+   *
+   * Constrained to what every vendor accepts in a tool name: a legal name must never fail
+   * at the provider, and a name with a slash in it would be silently dropped from the
+   * tool list by some of them.
+   */
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9_.-]+$/, 'tool names are [A-Za-z0-9_.-]'),
+  /** What the model reads to decide whether to call it. */
+  description: z.string().min(1).max(1_000),
+  /** JSON Schema for the arguments the MODEL supplies. `fixedArgs` are not in here. */
+  inputSchema: z.record(z.string(), z.unknown()).default({ type: 'object' }),
+  /** Must be one of the template's `allowedMethods`. */
+  method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).nullable().default(null),
+  /**
+   * RFC 6570 path, which must sit under the template's `pathPrefix`.
+   *
+   * `{name}` is one percent-encoded segment, so an argument cannot invent a path segment
+   * the template did not declare -- which is what stops an instantiation walking out of
+   * its prefix with a value rather than with a template.
+   */
+  pathTemplate: z.string().min(1).max(500).nullable().default(null),
+  /** Where arguments the path did not consume go. NULL means by method. */
+  argPlacement: z.enum(['query', 'body', 'none']).nullable().default(null),
+  /**
+   * Arguments bound by the platform, which the model never sees (ai-agent's `fixed` field
+   * mode).
+   *
+   * Merged in AFTER the model answers and stripped from the schema it was shown, so a
+   * pinned value cannot be argued with, hallucinated differently, or leaked into context.
+   */
+  fixedArgs: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type InlineToolSpec = z.infer<typeof inlineToolSchema>;
+
 export const agentSpecSchema = z
   .object({
     framework: z.enum(['echo', 'pipeline', 'deep-agents']).default('echo'),
@@ -38,7 +90,24 @@ export const agentSpecSchema = z
      * silently changing a running agent.
      */
     policyRef: z.string().min(1).max(200).nullable().default(null),
-    tools: z.array(z.string().min(1)).max(64).default([]),
+    /**
+     * Tools this agent may call: a registry ref, or an inline definition (§18.5).
+     *
+     * A bare string still means "select a tool I already hold a grant for", which is what
+     * every registered agent should use. The object form INSTANTIATES a `toolTemplate`,
+     * for the case §18.1 exists to serve: ap-executor's workflow author picks a piece and
+     * an action in the node, and there is no registration step to hang a tool row on.
+     *
+     * The split that makes this safe: the spec supplies the SHAPE, the template supplies
+     * the CONTRACT. Effects, residency, sandbox profile, timeout and the reachable origin
+     * all come from the template and are not expressible here. A caller that could declare
+     * its own effects would self-declare a payment tool `readOnly`, skip its approval gate
+     * and have the result cached -- §4.5 and §8.3 would become advisory.
+     */
+    tools: z
+      .array(z.union([z.string().min(1), inlineToolSchema]))
+      .max(64)
+      .default([]),
     /**
      * Sub-agents by name, resolved within the caller's OWN namespace (§13.3).
      *

@@ -72,12 +72,29 @@ export interface AgentVersionsTable {
   max_concurrent_runs: number | null; on_saturation: Generated<string>;
   overridable_fields: Generated<string[]>; created_by: string | null; created_at: TsD;
 }
+export interface ToolTemplatesTable {
+  id: Generated<string>; org_id: string; namespace_id: string;
+  ref: string; version: Generated<number>; description: string | null;
+  /** The CONTRACT. Inherited by every instantiation; not expressible in a spec. */
+  default_effects: EffectClass[]; residency: Residency; sandbox_profile: string;
+  timeout_ms: Generated<number>; max_retries: Generated<number>;
+  /** The reachable surface. A spec supplies only a path below `path_prefix`. */
+  endpoint_url: string; allowed_methods: Generated<string[]>; path_prefix: string;
+  static_headers: JsonD;
+  max_instances: Generated<number>;
+  status: Generated<RegistryStatus>; created_at: TsD;
+}
+
 export interface ToolsTable {
   id: Generated<string>; org_id: string; namespace_id: string; ref: string; version: Generated<number>;
   origin: ToolOrigin; residency: Residency; description: string | null; input_schema: Json;
   output_schema: Json | null; default_effects: EffectClass[]; timeout_ms: Generated<number>;
   max_retries: Generated<number>; sandbox_profile: string; endpoint_url: string | null;
   mcp_server_id: string | null; mcp_tool_name: string | null; definition_hash: string | null;
+  /** Set when INSTANTIATED from a tool_template by an inline spec; NULL when registered. */
+  template_id: string | null;
+  /** Content-addresses the instantiated shape, so identical specs collapse to one row. */
+  spec_hash: string | null;
   status: Generated<string>; created_at: TsD;
   http_method: Generated<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'>;
   path_template: string | null;
@@ -90,6 +107,8 @@ export interface AgentVersionToolsTable {
   agent_version_id: string; tool_id: string; effects: EffectClass[];
   cache_ttl_seconds: number | null; cache_scope: string | null; idempotency_key_tpl: string | null;
   compensation_tool_id: string | null;
+  /** Bound by the platform after the model answers, and hidden from its schema. */
+  fixed_args: JsonD;
 }
 export interface ThreadsTable {
   id: Generated<string>; org_id: string; namespace_id: string; tenant_ref: string;
@@ -530,7 +549,7 @@ export interface SchemaMigrationsTable { version: string; applied_at: TsD; check
 export interface Database {
   orgs: OrgsTable; namespaces: NamespacesTable; tenants: TenantsTable; principals: PrincipalsTable;
   models: ModelsTable; agents: AgentsTable; agent_versions: AgentVersionsTable;
-  tools: ToolsTable; agent_version_tools: AgentVersionToolsTable;
+  tool_templates: ToolTemplatesTable; tools: ToolsTable; agent_version_tools: AgentVersionToolsTable;
   threads: ThreadsTable; runs: RunsTable; run_queue: RunQueueTable; steps: StepsTable;
   trace_export_cursor: TraceExportCursorTable;
   tool_invocations: ToolInvocationsTable; checkpoints: CheckpointsTable;
