@@ -1,5 +1,6 @@
 import { Body, Controller, Param, Post } from '@nestjs/common';
 import { TriggerService } from '../../domain/trigger/trigger.service.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 /**
  * Trigger ingress.
@@ -15,6 +16,7 @@ import { TriggerService } from '../../domain/trigger/trigger.service.js';
 export class TriggersController {
   constructor(private readonly triggers: TriggerService) {}
 
+  @Doc({ summary: 'Inbound webhook. No identity headers — the trigger row carries tenancy.' })
   @Post('webhooks/:path')
   async webhook(@Param('path') path: string, @Body() body: unknown): Promise<unknown> {
     const trigger = await this.triggers.byWebhookPath(path);

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { MemoryEngine } from '../../domain/memory/memory.engine.js';
 import { PlatformError, NotFound } from '../../domain/errors/platform.errors.js';
 import { requireContext } from '../../platform/context/platform-context.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const TIERS = ['working', 'conversational', 'semantic', 'episodic', 'procedural', 'external'] as const;
 const SCOPES = ['org', 'tenant', 'user', 'agent', 'thread', 'run'] as const;
@@ -58,11 +59,18 @@ export class MemoryController {
   constructor(private readonly memory: MemoryEngine) {}
 
   /** Which adapter is behind each seam — useful when a swap is in flight. */
+  @Doc({
+    summary: 'Describe the memory engine and its tiers',
+  })
   @Get('engine')
   engine(): unknown {
     return { adapters: this.memory.describe() };
   }
 
+  @Doc({
+    summary: 'Write a memory record',
+    body: storeBody,
+  })
   @Post()
   async store(@Body() body: unknown): Promise<unknown> {
     const parsed = storeBody.safeParse(body);
@@ -93,6 +101,12 @@ export class MemoryController {
     return { id };
   }
 
+  @Doc({
+    summary: 'Recall memory for this tenant',
+    description:
+      'Scoped to the tenant by construction; cross-tenant sharing is opt-in per namespace (§6).',
+    body: searchBody,
+  })
   @Post('search')
   async search(@Body() body: unknown): Promise<unknown> {
     const parsed = searchBody.safeParse(body ?? {});
@@ -133,6 +147,9 @@ export class MemoryController {
    * tenant needs everything at a scope, and a relevance ranking would silently omit the
    * record they came to find.
    */
+  @Doc({
+    summary: 'List memory records',
+  })
   @Get()
   async list(
     @Query('tier') tier?: string,
@@ -189,6 +206,9 @@ export class MemoryController {
     return { records, count: records.length };
   }
 
+  @Doc({
+    summary: 'Read one memory record',
+  })
   @Get(':id')
   async get(@Param('id') id: string): Promise<unknown> {
     const ctx = requireContext();
@@ -200,12 +220,21 @@ export class MemoryController {
     return record;
   }
 
+  @Doc({
+    summary: 'Trace where a memory came from',
+    description:
+      '§6.4: provenance is kept so hearsay stays distinguishable from first-party knowledge.',
+  })
   @Get(':id/lineage')
   async lineage(@Param('id') id: string, @Query('depth') depth?: string): Promise<unknown> {
     await this.get(id);
     return { edges: await this.memory.provenanceOf(id, Number(depth ?? 3) || 3) };
   }
 
+  @Doc({
+    summary: 'Consolidate memory across records',
+    body: consolidateBody,
+  })
   @Post('consolidate')
   async consolidate(@Body() body: unknown): Promise<unknown> {
     const parsed = consolidateBody.safeParse(body);
@@ -225,6 +254,9 @@ export class MemoryController {
     return result ?? { consolidated: false, reason: 'not enough records to consolidate' };
   }
 
+  @Doc({
+    summary: 'Forget one memory record',
+  })
   @Delete(':id')
   async forget(@Param('id') id: string): Promise<unknown> {
     await this.get(id);
@@ -233,6 +265,9 @@ export class MemoryController {
   }
 
   /** Bulk erasure by scope — the path a data-deletion request actually uses. */
+  @Doc({
+    summary: 'Forget every record in a scope',
+  })
   @Delete()
   async forgetScope(@Query('threadId') threadId?: string, @Query('tier') tier?: string): Promise<unknown> {
     const ctx = requireContext();
@@ -260,6 +295,12 @@ export class MemoryController {
    * one. Correcting a memory is superseding it, which keeps both the correction and what
    * it replaced (§6.4).
    */
+  @Doc({
+    summary: 'Amend a memory record',
+    description:
+      'Cannot change `content`: the embedding was computed from it, so a changed body would be findable by the old text and not the new.',
+    body: amendBody,
+  })
   @Patch(':id')
   async amend(@Param('id') id: string, @Body() body: unknown): Promise<unknown> {
     // Named explicitly, because "nothing to amend" is a true but unhelpful answer to

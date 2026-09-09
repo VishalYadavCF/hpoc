@@ -11,6 +11,7 @@ import type { Db } from '../../platform/persistence/database.js';
 import { EventLog } from '../../domain/event-log/event-log.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { requireContext } from '../../platform/context/platform-context.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const forkBody = z.object({
   checkpointId: z.string().uuid().optional(),
@@ -58,6 +59,12 @@ export class RunsController {
    * `mode` is delivery, not durability: every run here is durable, and a `sync` client
    * that disconnects leaves the run executing and resumable by id (§18.4).
    */
+  @Doc({
+    summary: 'Start a run from an inline agent spec',
+    description:
+      'The ephemeral path (§18.1). `mode` is delivery, not durability: every run here is durable, and a `sync` client that disconnects leaves the run executing and resumable by id.',
+    body: createRunBody,
+  })
   @Post()
   async create(
     @Body() body: unknown,
@@ -94,6 +101,9 @@ export class RunsController {
    * single segment, so ordering is not strictly load-bearing here — but the list is the
    * more general route and reads more naturally first.
    */
+  @Doc({
+    summary: 'List runs for this tenant',
+  })
   @Get()
   async list(
     @Query('threadId') threadId?: string,
@@ -123,6 +133,9 @@ export class RunsController {
     });
   }
 
+  @Doc({
+    summary: 'Read one run',
+  })
   @Get(':id')
   async get(@Param('id') id: string): Promise<unknown> {
     const run = await this.runs.get(id);
@@ -142,17 +155,28 @@ export class RunsController {
     };
   }
 
+  @Doc({
+    summary: 'List the steps a run took',
+  })
   @Get(':id/steps')
   async steps(@Param('id') id: string): Promise<unknown> {
     return { steps: await this.runs.listSteps(id) };
   }
 
+  @Doc({
+    summary: 'Read the run\'s event log from a cursor',
+    description:
+      'Replayable history (§15.1). Use with `GET /events` to resume a stream without gaps.',
+  })
   @Get(':id/events/history')
   async history(@Param('id') id: string): Promise<unknown> {
     await this.runs.get(id);
     return { events: await this.events.read(this.db, id, 0, 500) };
   }
 
+  @Doc({
+    summary: 'Cancel a run',
+  })
   @Post(':id/cancel')
   async cancel(@Param('id') id: string): Promise<unknown> {
     await this.runs.cancel(id);
@@ -160,6 +184,11 @@ export class RunsController {
   }
 
   /** SSE, with Last-Event-ID replay-then-tail (§12.1). */
+  @Doc({
+    summary: 'Stream run events over SSE',
+    description:
+      'Resumable: pass `Last-Event-ID` to continue where a dropped connection stopped.',
+  })
   @Get(':id/events')
   async events_(
     @Param('id') id: string,
@@ -170,6 +199,9 @@ export class RunsController {
     await this.stream.attach(id, res, Number(lastEventId ?? 0) || 0);
   }
 
+  @Doc({
+    summary: 'Read one step by sequence number',
+  })
   @Get(':id/steps/:seq')
   async step(@Param('id') id: string, @Param('seq') seq: string): Promise<unknown> {
     const n = Number(seq);
@@ -179,16 +211,27 @@ export class RunsController {
     return this.reads.step(id, n);
   }
 
+  @Doc({
+    summary: 'List the tool invocations a run made',
+    description:
+      'Every effect the run had, with its contract and idempotency key (§4.5).',
+  })
   @Get(':id/tool-invocations')
   async toolInvocations(@Param('id') id: string): Promise<unknown> {
     return { toolInvocations: await this.reads.toolInvocations(id) };
   }
 
+  @Doc({
+    summary: 'List a run\'s checkpoints',
+  })
   @Get(':id/checkpoints')
   async checkpoints(@Param('id') id: string): Promise<unknown> {
     return { checkpoints: await this.reads.checkpoints(id) };
   }
 
+  @Doc({
+    summary: 'Read one checkpoint',
+  })
   @Get(':id/checkpoints/:checkpointId')
   async checkpoint(
     @Param('id') id: string,
@@ -197,26 +240,43 @@ export class RunsController {
     return this.reads.checkpoint(id, checkpointId);
   }
 
+  @Doc({
+    summary: 'List approvals and questions raised by this run',
+  })
   @Get(':id/interactions')
   async interactions(@Param('id') id: string): Promise<unknown> {
     return { interactions: await this.reads.interactions(id) };
   }
 
+  @Doc({
+    summary: 'List artifacts this run produced',
+  })
   @Get(':id/artifacts')
   async artifacts(@Param('id') id: string): Promise<unknown> {
     return { artifacts: await this.reads.artifacts(id) };
   }
 
+  @Doc({
+    summary: 'List runs this run delegated to',
+  })
   @Get(':id/children')
   async children(@Param('id') id: string): Promise<unknown> {
     return { children: await this.reads.children(id) };
   }
 
+  @Doc({
+    summary: 'Read the run\'s token and cost ledger',
+  })
   @Get(':id/usage')
   async usage(@Param('id') id: string): Promise<unknown> {
     return this.reads.usage(id);
   }
 
+  @Doc({
+    summary: 'Trace this run\'s ancestry',
+    description:
+      'The full delegation chain, so the originating human survives every hop (§0.1).',
+  })
   @Get(':id/lineage')
   async lineage(@Param('id') id: string): Promise<unknown> {
     return this.reads.lineage(id);
@@ -229,6 +289,11 @@ export class RunsController {
    * original did after the fork point, and a caller needs to see the side effects that
    * implies before authorising it.
    */
+  @Doc({
+    summary: 'Preview what forking this run would repeat',
+    description:
+      'Lists the effects a fork would perform a second time, before you commit to it.',
+  })
   @Get(':id/fork')
   async previewFork(
     @Param('id') id: string,
@@ -241,6 +306,12 @@ export class RunsController {
     });
   }
 
+  @Doc({
+    summary: 'Fork a run from a checkpoint',
+    description:
+      '§4.2: a fork REPEATS every effect the original performed past the fork point, which is why the acknowledgement is required rather than assumed.',
+    body: forkBody,
+  })
   @Post(':id/fork')
   async fork(@Param('id') id: string, @Body() body: unknown): Promise<unknown> {
     const parsed = forkBody.safeParse(body ?? {});
@@ -259,6 +330,12 @@ export class RunsController {
   }
 
   /** Operator resume of a run stuck in `waiting` or dead-lettered (§0.8). */
+  @Doc({
+    summary: 'Resume a dead-lettered run',
+    description:
+      'An operator override of the platform\'s own recovery decision. The reason is mandatory and audited (§16.4).',
+    body: resumeBody,
+  })
   @Post(':id/resume')
   async resume(@Param('id') id: string, @Body() body: unknown): Promise<unknown> {
     const parsed = resumeBody.safeParse(body ?? {});

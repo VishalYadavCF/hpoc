@@ -6,6 +6,7 @@ import { PlatformError } from '../../domain/errors/platform.errors.js';
 import { RunService } from '../../domain/run-engine/run.service.js';
 import { PeerService } from '../../domain/peer/peer.service.js';
 import { requireContext } from '../../platform/context/platform-context.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const triggerBody = z
   .object({
@@ -59,6 +60,12 @@ export class AgentsController {
   ) {}
 
   /** Register, or publish a new immutable version of an existing agent (§17.4). */
+  @Doc({
+    summary: 'Register an agent version',
+    description:
+      'Goes through admission: capability grants, policy and residency are all resolved here, and a spec that asks for more than it may have is refused rather than narrowed silently (§17).',
+    body: publishBody,
+  })
   @Post()
   async publish(@Body() body: unknown): Promise<unknown> {
     const parsed = publishBody.safeParse(body);
@@ -75,22 +82,34 @@ export class AgentsController {
     });
   }
 
+  @Doc({
+    summary: 'List agents',
+  })
   @Get()
   async list(): Promise<unknown> {
     return { agents: await this.agents.list() };
   }
 
+  @Doc({
+    summary: 'Read one agent',
+  })
   @Get(':name')
   async get(@Param('name') name: string): Promise<unknown> {
     return this.agents.get(name);
   }
 
+  @Doc({
+    summary: 'List an agent\'s triggers',
+  })
   @Get(':name/triggers')
   async listTriggers(@Param('name') name: string): Promise<unknown> {
     const agent = await this.agents.get(name);
     return { triggers: await this.triggers.listForAgent(agent.id) };
   }
 
+  @Doc({
+    summary: 'Attach a trigger to an agent',
+  })
   @Post(':name/triggers')
   async attachTrigger(@Param('name') name: string, @Body() body: unknown): Promise<unknown> {
     const parsed = triggerBody.safeParse(body);
@@ -116,6 +135,10 @@ export class AgentsController {
    * creates-or-updates, so a typo in the name quietly registers a second agent. PUT says
    * "I expect this to exist" and gets a 404.
    */
+  @Doc({
+    summary: 'Replace an agent\'s spec, creating a new version',
+    body: replaceBody,
+  })
   @Put(':name')
   async replace(@Param('name') name: string, @Body() body: unknown): Promise<unknown> {
     const parsed = replaceBody.safeParse(body);
@@ -133,6 +156,11 @@ export class AgentsController {
   }
 
   /** Admission dry-run (§17.5). Returns every rejection at once, never a narrowed spec. */
+  @Doc({
+    summary: 'Dry-run admission for a spec',
+    description:
+      'Returns the rejections a publish would produce, without creating a version.',
+  })
   @Post(':name/validate')
   async validate(@Body() body: unknown): Promise<unknown> {
     const parsed = z.object({ agent: z.unknown() }).safeParse(body);
@@ -142,11 +170,17 @@ export class AgentsController {
     return this.agents.validate(parsed.data.agent);
   }
 
+  @Doc({
+    summary: 'List an agent\'s versions',
+  })
   @Get(':name/versions')
   async versions(@Param('name') name: string): Promise<unknown> {
     return { versions: await this.agents.listVersions(name) };
   }
 
+  @Doc({
+    summary: 'Read one agent version',
+  })
   @Get(':name/versions/:version')
   async version(@Param('name') name: string, @Param('version') version: string): Promise<unknown> {
     const n = Number(version);
@@ -157,6 +191,9 @@ export class AgentsController {
   }
 
   /** Observed state and conditions (§17.7) — deliberately separate from the desired spec. */
+  @Doc({
+    summary: 'Read an agent\'s deployment status',
+  })
   @Get(':name/status')
   async status(@Param('name') name: string): Promise<unknown> {
     return this.agents.status(name);
@@ -169,6 +206,9 @@ export class AgentsController {
    * peers see without authenticating as one. Derived on read, never stored — a stale
    * capability descriptor is worse than none, because callers act on it.
    */
+  @Doc({
+    summary: 'Read the agent card (§13.6)',
+  })
   @Get(':name/card')
   async card(@Param('name') name: string): Promise<unknown> {
     const ctx = requireContext();
@@ -176,6 +216,12 @@ export class AgentsController {
   }
 
   /** Starts a run of a registered agent on its current version (§18.3). */
+  @Doc({
+    summary: 'Start a run of a registered agent',
+    description:
+      'Routed by deployment, so canary and shadow apply (§15.5).',
+    body: agentRunBody,
+  })
   @Post(':name/runs')
   async run(@Param('name') name: string, @Body() body: unknown): Promise<unknown> {
     const parsed = agentRunBody.safeParse(body ?? {});
@@ -207,6 +253,9 @@ export class AgentsController {
   }
 
   /** Deprecate and archive (§17.4). Never deletes — history points at its versions. */
+  @Doc({
+    summary: 'Archive an agent',
+  })
   @Delete(':name')
   async archive(@Param('name') name: string): Promise<unknown> {
     return this.agents.archive(name);

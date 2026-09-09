@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { z } from 'zod';
 import { PolicyService } from '../../domain/policy/policy.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const publishBody = z.object({
   ref: z.string().min(1).max(200),
@@ -36,11 +37,20 @@ const versionParam = (value: string): number => {
 export class PoliciesController {
   constructor(private readonly policies: PolicyService) {}
 
+  @Doc({
+    summary: 'List policies',
+  })
   @Get()
   async list(): Promise<unknown> {
     return { policies: await this.policies.list() };
   }
 
+  @Doc({
+    summary: 'Publish a policy version',
+    description:
+      'A policy can only NARROW what a spec asks for, never grant (§17.3).',
+    body: publishBody,
+  })
   @Post()
   async publish(@Body() body: unknown): Promise<unknown> {
     const parsed = publishBody.safeParse(body);
@@ -52,23 +62,35 @@ export class PoliciesController {
     return this.policies.publish(parsed.data);
   }
 
+  @Doc({
+    summary: 'List a policy\'s versions',
+  })
   @Get(':ref/versions')
   async versions(@Param('ref') ref: string): Promise<unknown> {
     return { ref, versions: await this.policies.versions(ref) };
   }
 
+  @Doc({
+    summary: 'Read one policy version',
+  })
   @Get(':ref/versions/:version')
   async version(@Param('ref') ref: string, @Param('version') version: string): Promise<unknown> {
     return this.policies.version(ref, versionParam(version));
   }
 
   /** Approval makes a version selectable by BARE NAME; until then it needs an explicit pin. */
+  @Doc({
+    summary: 'Approve a policy version',
+  })
   @Post(':ref/versions/:version/approve')
   async approve(@Param('ref') ref: string, @Param('version') version: string): Promise<unknown> {
     return this.policies.approve(ref, versionParam(version));
   }
 
   /** Which agent versions pin this policy version — "who breaks if I tighten this?" */
+  @Doc({
+    summary: 'List agent versions pinned to this policy',
+  })
   @Get(':ref/versions/:version/usage')
   async usage(@Param('ref') ref: string, @Param('version') version: string): Promise<unknown> {
     const pinnedBy = await this.policies.usage(ref, versionParam(version));

@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { DeploymentService } from '../../domain/eval/deployment.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const environment = z.enum(['staging', 'production']);
 
@@ -41,11 +42,17 @@ const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
 export class DeploymentsController {
   constructor(private readonly deployments: DeploymentService) {}
 
+  @Doc({
+    summary: 'List deployments',
+  })
   @Get('deployments')
   async list(@Param('name') name: string): Promise<unknown> {
     return { deployments: await this.deployments.list(name) };
   }
 
+  @Doc({
+    summary: 'Set a promotion gate',
+  })
   @Post('gate')
   async setGate(@Param('name') name: string, @Body() body: unknown): Promise<unknown> {
     const input = parse(gateBody, body);
@@ -59,6 +66,9 @@ export class DeploymentsController {
   }
 
   /** Answers "would this promote?" without promoting — see DeploymentService.checkGate. */
+  @Doc({
+    summary: 'Check whether a version would pass its gate',
+  })
   @Get('gate')
   async checkGate(
     @Param('name') name: string,
@@ -72,6 +82,11 @@ export class DeploymentsController {
     return this.deployments.checkGate(name, parsed.data, versionId);
   }
 
+  @Doc({
+    summary: 'Promote a version',
+    description:
+      'Refused when the gate fails, unless explicitly overridden — and the override is recorded.',
+  })
   @Post('promote')
   async promote(@Param('name') name: string, @Body() body: unknown): Promise<unknown> {
     const input = parse(promoteBody, body);
@@ -85,6 +100,9 @@ export class DeploymentsController {
     });
   }
 
+  @Doc({
+    summary: 'Roll back to the previous version',
+  })
   @Post('rollback')
   async rollback(@Param('name') name: string, @Body() body: unknown): Promise<unknown> {
     const parsed = z.object({ environment }).safeParse(body);

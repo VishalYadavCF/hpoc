@@ -4,6 +4,7 @@ import { TraceService } from '../../domain/observability/trace.service.js';
 import { AnalyticsService } from '../../domain/observability/analytics.service.js';
 import { FeedbackService } from '../../domain/observability/feedback.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const feedbackBody = z
   .object({
@@ -36,17 +37,20 @@ export class ObservabilityController {
 
   // ---- §15.2 traces -------------------------------------------------------
 
+  @Doc({ summary: 'Read a run\'s trace' })
   @Get('runs/:id/trace')
   async runTrace(@Param('id') id: string): Promise<unknown> {
     return this.traces.forRun(id);
   }
 
+  @Doc({ summary: 'Read one trace by id' })
   @Get('traces/:traceId')
   async trace(@Param('traceId') traceId: string): Promise<unknown> {
     return this.traces.forTraceId(traceId);
   }
 
   /** A whole conversation, turn by turn — the chatbot view. */
+  @Doc({ summary: 'Read a thread\'s trace' })
   @Get('threads/:id/trace')
   async threadTrace(@Param('id') id: string): Promise<unknown> {
     return this.traces.forThread(id);
@@ -54,6 +58,7 @@ export class ObservabilityController {
 
   // ---- §15.3 lineage ------------------------------------------------------
 
+  @Doc({ summary: 'Trace lineage for any entity' })
   @Get('lineage/:kind/:id')
   async lineage(
     @Param('kind') kind: string,
@@ -65,26 +70,31 @@ export class ObservabilityController {
 
   // ---- §15.5 analytics ----------------------------------------------------
 
+  @Doc({ summary: 'Per-version analytics' })
   @Get('analytics/versions')
   async versions(@Query('hours') hours?: string, @Query('agent') agent?: string): Promise<unknown> {
     return { versions: await this.analytics.byVersion(window(hours, agent)) };
   }
 
+  @Doc({ summary: 'Latency analytics' })
   @Get('analytics/latency')
   async latency(@Query('hours') hours?: string): Promise<unknown> {
     return this.analytics.latencyBreakdown(window(hours));
   }
 
+  @Doc({ summary: 'Tool-usage analytics' })
   @Get('analytics/tools')
   async tools(@Query('hours') hours?: string): Promise<unknown> {
     return { tools: await this.analytics.toolHealth(window(hours)) };
   }
 
+  @Doc({ summary: 'Memory analytics' })
   @Get('analytics/memory')
   async memory(@Query('hours') hours?: string): Promise<unknown> {
     return this.analytics.memoryEffectiveness(window(hours));
   }
 
+  @Doc({ summary: 'Interaction analytics' })
   @Get('analytics/interactions')
   async interactions(@Query('hours') hours?: string): Promise<unknown> {
     return { interactions: await this.analytics.interactionHealth(window(hours)) };
@@ -92,6 +102,7 @@ export class ObservabilityController {
 
   // ---- §15.5 feedback -----------------------------------------------------
 
+  @Doc({ summary: 'Submit feedback on a run' })
   @Post('feedback')
   async submit(@Body() body: unknown): Promise<unknown> {
     const parsed = feedbackBody.safeParse(body);
@@ -103,6 +114,7 @@ export class ObservabilityController {
     return this.feedback.submit(parsed.data);
   }
 
+  @Doc({ summary: 'List feedback' })
   @Get('feedback')
   async listFeedback(
     @Query('runId') runId?: string,
@@ -111,6 +123,7 @@ export class ObservabilityController {
     return { feedback: await this.feedback.list({ runId, threadId }) };
   }
 
+  @Doc({ summary: 'Summarise feedback' })
   @Get('feedback/summary')
   async feedbackSummary(@Query('hours') hours?: string): Promise<unknown> {
     return { summary: await this.feedback.summary(Number(hours ?? 168) || 168) };

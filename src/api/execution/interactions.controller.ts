@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { InteractionService } from '../../domain/interaction/interaction.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const respondBody = z.object({
   approved: z.boolean(),
@@ -12,6 +13,9 @@ const respondBody = z.object({
 export class InteractionsController {
   constructor(private readonly interactions: InteractionService) {}
 
+  @Doc({
+    summary: 'List open interactions',
+  })
   @Get()
   async list(
     @Query('status') status?: string,
@@ -20,6 +24,9 @@ export class InteractionsController {
     return { interactions: await this.interactions.list(status, mine === 'true') };
   }
 
+  @Doc({
+    summary: 'Read one interaction',
+  })
   @Get(':id')
   async get(@Param('id') id: string): Promise<unknown> {
     const row = await this.interactions.get(id);
@@ -38,6 +45,12 @@ export class InteractionsController {
   }
 
   /** Answering resumes the run: it returns to the queue and a worker picks it up. */
+  @Doc({
+    summary: 'Answer an interaction',
+    description:
+      'Approving here is what lets a gated side effect proceed (§14). The run resumes and finishes the action it was gated on.',
+    body: respondBody,
+  })
   @Post(':id/respond')
   async respond(@Param('id') id: string, @Body() body: unknown): Promise<unknown> {
     const parsed = respondBody.safeParse(body);
@@ -53,6 +66,9 @@ export class InteractionsController {
     });
   }
 
+  @Doc({
+    summary: 'Cancel an interaction',
+  })
   @Post(':id/cancel')
   async cancel(@Param('id') id: string): Promise<unknown> {
     await this.interactions.cancel(id);

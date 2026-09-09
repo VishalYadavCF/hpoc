@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { EvalService } from '../../domain/eval/eval.service.js';
 import { EvalSuiteService } from '../../domain/eval/suite.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const MECHANISMS = [
   'summarization', 'compaction', 'memory_tiers', 'planning_scaffold', 'sub_agents',
@@ -72,6 +73,11 @@ export class EvalsController {
    * under their own prefixes: a bare `{ref}` at this level would mean every literal route
    * added later silently shadows a suite named the same thing.
    */
+  @Doc({
+    summary: 'List the compensating mechanisms an eval can toggle',
+    description:
+      '§0.5: every mechanism is individually disableable, so its contribution can be measured.',
+  })
   @Get('mechanisms')
   async mechanisms(): Promise<unknown> {
     return {
@@ -82,16 +88,25 @@ export class EvalsController {
     };
   }
 
+  @Doc({
+    summary: 'List eval suites',
+  })
   @Get('suites')
   async list(): Promise<unknown> {
     return { suites: await this.suites.list() };
   }
 
+  @Doc({
+    summary: 'Create or update an eval suite',
+  })
   @Post('suites')
   async upsert(@Body() body: unknown): Promise<unknown> {
     return this.suites.upsert(parse(suiteBody, body));
   }
 
+  @Doc({
+    summary: 'Read an eval suite',
+  })
   @Get('suites/:ref')
   async get(@Param('ref') ref: string): Promise<unknown> {
     return this.suites.get(ref);
@@ -104,12 +119,18 @@ export class EvalsController {
    * a suite an author edited is exactly what they submitted. A merge would leave a deleted
    * case still scoring, and the suite would differ from what its author believes gates on it.
    */
+  @Doc({
+    summary: 'Replace an eval suite',
+  })
   @Put('suites/:ref')
   async replace(@Param('ref') ref: string, @Body() body: unknown): Promise<unknown> {
     const input = parse(suiteBody.omit({ ref: true }), body);
     return this.suites.upsert({ ...input, ref });
   }
 
+  @Doc({
+    summary: 'List a suite\'s cases',
+  })
   @Get('suites/:ref/cases')
   async cases(@Param('ref') ref: string): Promise<unknown> {
     const suite = await this.suites.get(ref);
@@ -123,6 +144,9 @@ export class EvalsController {
    * to settle. Deliberate at this scale — the caller is usually CI, which wants the verdict
    * rather than a job id to poll — and `caseTimeoutMs` bounds it.
    */
+  @Doc({
+    summary: 'Run an eval suite',
+  })
   @Post('runs')
   async run(@Body() body: unknown): Promise<unknown> {
     const input = parse(runBody, body);
@@ -134,6 +158,9 @@ export class EvalsController {
     });
   }
 
+  @Doc({
+    summary: 'List eval runs',
+  })
   @Get('runs')
   async history(
     @Query('suiteRef') suiteRef?: string,
@@ -147,11 +174,19 @@ export class EvalsController {
     return { runs: await this.evals.history(suiteRef, Math.min(Number(limit) || 20, 100)) };
   }
 
+  @Doc({
+    summary: 'Read one eval run',
+  })
   @Get('runs/:evalRunId')
   async evalRun(@Param('evalRunId') evalRunId: string): Promise<unknown> {
     return this.evals.evalRun(evalRunId);
   }
 
+  @Doc({
+    summary: 'Read an eval run\'s results',
+    description:
+      'Includes variance across trials: a single-trial score cannot tell an improvement from noise.',
+  })
   @Get('runs/:evalRunId/results')
   async results(@Param('evalRunId') evalRunId: string): Promise<unknown> {
     return { cases: await this.evals.caseResults(evalRunId) };

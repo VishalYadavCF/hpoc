@@ -2,6 +2,7 @@ import { Body, Controller, Post } from '@nestjs/common';
 import { z } from 'zod';
 import { ReplayService } from '../../domain/run-engine/replay.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const replayBody = z.object({
   runId: z.string().uuid(),
@@ -20,6 +21,12 @@ const replayBody = z.object({
 export class ReplayController {
   constructor(private readonly replay: ReplayService) {}
 
+  @Doc({
+    summary: 'Replay a run through the current schema',
+    description:
+      '§10: replay reconstructs from the event log, so a cache hit and a miss produce identical history.',
+    body: replayBody,
+  })
   @Post()
   async run(@Body() body: unknown): Promise<unknown> {
     const parsed = replayBody.safeParse(body ?? {});

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { KnowledgeService } from '../../domain/knowledge/knowledge.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const collectionBody = z.object({
   name: z.string().min(1).max(120),
@@ -45,12 +46,18 @@ const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
 export class KnowledgeController {
   constructor(private readonly knowledge: KnowledgeService) {}
 
+  @Doc({
+    summary: 'List knowledge collections',
+  })
   @Get('collections')
   async listCollections(): Promise<unknown> {
     const ctx = requireContext();
     return { collections: await this.knowledge.listCollections(ctx.namespaceId) };
   }
 
+  @Doc({
+    summary: 'Create a knowledge collection',
+  })
   @Post('collections')
   async createCollection(@Body() body: unknown): Promise<unknown> {
     const ctx = requireContext();
@@ -64,11 +71,17 @@ export class KnowledgeController {
     });
   }
 
+  @Doc({
+    summary: 'List documents in a collection',
+  })
   @Get('collections/:id/documents')
   async listDocuments(@Param('id') id: string): Promise<unknown> {
     return { documents: await this.knowledge.listDocuments(id) };
   }
 
+  @Doc({
+    summary: 'Ingest a document',
+  })
   @Post('collections/:id/documents')
   async ingest(@Param('id') id: string, @Body() body: unknown): Promise<unknown> {
     const ctx = requireContext();
@@ -84,6 +97,9 @@ export class KnowledgeController {
     });
   }
 
+  @Doc({
+    summary: 'Delete a document',
+  })
   @Delete('collections/:id/documents/:documentId')
   async deleteDocument(
     @Param('id') id: string,
@@ -101,6 +117,9 @@ export class KnowledgeController {
    * passages, or the model misused the right ones -- and they are fixed in different
    * places. Without this endpoint the two are indistinguishable from the outside.
    */
+  @Doc({
+    summary: 'Search a collection',
+  })
   @Get('collections/:id/search')
   async search(@Param('id') id: string, @Query('q') q?: string): Promise<unknown> {
     if (!q) throw new PlatformError('admission_rejected', 'Query parameter "q" is required');

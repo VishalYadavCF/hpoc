@@ -5,6 +5,7 @@ import { DB } from '../../platform/persistence/tokens.js';
 import type { Db } from '../../platform/persistence/database.js';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const policyBody = z.object({
   tiers: z.array(z.enum(['working', 'conversational', 'semantic', 'episodic', 'procedural', 'external'])).min(1),
@@ -25,6 +26,9 @@ const policyBody = z.object({
 export class MemorySharingController {
   constructor(@Inject(DB) private readonly db: Db) {}
 
+  @Doc({
+    summary: 'Read the namespace\'s memory-sharing policy',
+  })
   @Get()
   async get(): Promise<unknown> {
     const ctx = requireContext();
@@ -55,6 +59,12 @@ export class MemorySharingController {
     };
   }
 
+  @Doc({
+    summary: 'Set the memory-sharing policy',
+    description:
+      'Cross-tenant recall is opt-in per namespace and decided by the consuming service, never by the platform.',
+    body: policyBody,
+  })
   @Post()
   async set(@Body() body: unknown): Promise<unknown> {
     const parsed = policyBody.safeParse(body);
@@ -90,6 +100,9 @@ export class MemorySharingController {
       .executeTakeFirstOrThrow();
   }
 
+  @Doc({
+    summary: 'Revoke memory sharing',
+  })
   @Delete()
   async revoke(): Promise<unknown> {
     const ctx = requireContext();

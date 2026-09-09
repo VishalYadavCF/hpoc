@@ -8,6 +8,7 @@ import { Metrics } from '../../platform/observability/metrics.js';
 import { BackpressureService } from '../../domain/governance/backpressure.service.js';
 import { BudgetService } from '../../domain/governance/budget.service.js';
 import { NotFound } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 @Controller()
 export class OpsController {
@@ -19,12 +20,14 @@ export class OpsController {
     private readonly budgets: BudgetService,
   ) {}
 
+  @Doc({ summary: 'Liveness probe. No tenancy.' })
   @Get('healthz')
   health(): unknown {
     return { status: 'ok' };
   }
 
   /** Readiness checks the database AND that migrations have been applied. */
+  @Doc({ summary: 'Readiness probe. No tenancy.' })
   @Get('readyz')
   async ready(): Promise<unknown> {
     const applied = await this.db
@@ -34,6 +37,7 @@ export class OpsController {
     return { status: 'ok', migrations: Number(applied?.n ?? 0) };
   }
 
+  @Doc({ summary: 'Prometheus metrics. No tenancy.' })
   @Get('metrics')
   @Header('content-type', 'text/plain; version=0.0.4')
   async metricsEndpoint(): Promise<string> {
@@ -70,6 +74,7 @@ export class OpsController {
    * The failure history is the point -- reason, attempts, the worker that held it last,
    * and whether anyone has looked at it.
    */
+  @Doc({ summary: 'List dead-lettered runs' })
   @Get('v1/ops/dead-letters')
   async deadLetters(@Query('acknowledged') acknowledged?: string): Promise<unknown> {
     let q = this.db
@@ -91,6 +96,7 @@ export class OpsController {
    * scheduler and workers keep their hot paths to one cheap NOTIFY; operators ask for the
    * heavier counts only when diagnosing capacity, starvation, or a stalled reclaimer.
    */
+  @Doc({ summary: 'Queue depth and lease health' })
   @Get('v1/ops/queue')
   async queue(): Promise<unknown> {
     const result = await sql<{
@@ -145,6 +151,7 @@ export class OpsController {
     };
   }
 
+  @Doc({ summary: 'Read one dead letter' })
   @Get('v1/ops/dead-letters/:id')
   async deadLetter(@Param('id') id: string): Promise<unknown> {
     const row = await this.db
@@ -161,6 +168,7 @@ export class OpsController {
     return { ...row, steps };
   }
 
+  @Doc({ summary: 'Acknowledge a dead letter' })
   @Post('v1/ops/dead-letters/:id/acknowledge')
   async acknowledge(@Param('id') id: string): Promise<unknown> {
     const updated = await this.db
@@ -174,11 +182,13 @@ export class OpsController {
     return { acknowledged: true };
   }
 
+  @Doc({ summary: 'Read backpressure policies' })
   @Get('v1/ops/backpressure')
   async policies(@Query('orgId') orgId: string): Promise<unknown> {
     return { policies: await this.backpressure.list(orgId) };
   }
 
+  @Doc({ summary: 'Set a backpressure policy' })
   @Post('v1/ops/backpressure')
   async setPolicy(@Body() body: Record<string, unknown>): Promise<unknown> {
     return this.backpressure.upsert({
@@ -193,11 +203,14 @@ export class OpsController {
   }
 
   /** §5.2 hierarchical budgets. */
+  @Doc({ summary: 'Read budget consumption for an org' })
   @Get('v1/ops/budgets')
   async budgetsFor(@Query('orgId') orgId: string): Promise<unknown> {
     return { budgets: await this.budgets.list(orgId) };
   }
 
+  @Doc({ summary: 'Set a budget' })
+  @Doc({ summary: 'Set a budget' })
   @Post('v1/ops/budgets')
   async setBudget(@Body() body: Record<string, unknown>): Promise<unknown> {
     return this.budgets.upsert({
@@ -210,6 +223,7 @@ export class OpsController {
   }
 
   /** §15.4: the platform is itself a distributed system and must report on itself. */
+  @Doc({ summary: 'Subsystem health across the platform' })
   @Get('v1/ops/subsystems')
   async subsystems(): Promise<unknown> {
     const [queue, runs, dead] = await Promise.all([

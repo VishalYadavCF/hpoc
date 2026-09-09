@@ -215,3 +215,17 @@ for each.
 
 Memory tiers and the context engine (Phase 2 — pgvector is installed but unused),
 artifacts, the caching layer, MCP and A2A adapters, voice, and eval-gated deployment.
+
+## API reference
+
+`GET /docs` — Swagger UI, served by the running API. `GET /docs/json` and `GET /docs/yaml`
+for the raw OpenAPI 3 document.
+
+The document is generated from the router and from the **Zod schemas that validate
+requests**, not from a checked-in spec or a parallel set of DTO classes. A shape shown
+there is the shape that is enforced, and a route cannot exist without appearing — a test
+fails if any operation lacks a description.
+
+Every tenanted call needs `x-caller-subject`, `x-namespace` and `x-tenant-ref`; the
+reference declares them per operation, and correctly omits them on `/healthz`, `/metrics`
+and `/v1/triggers/*`, which have no caller identity by design.

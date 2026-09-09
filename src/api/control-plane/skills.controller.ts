@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { SkillService } from '../../domain/skills/skill.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const publishBody = z.object({
   name: z.string().min(1).max(120),
@@ -26,12 +27,19 @@ const publishBody = z.object({
 export class SkillsController {
   constructor(private readonly skills: SkillService) {}
 
+  @Doc({
+    summary: 'List skills',
+  })
   @Get()
   async list(): Promise<unknown> {
     const ctx = requireContext();
     return { skills: await this.skills.list(ctx.namespaceId) };
   }
 
+  @Doc({
+    summary: 'Publish a skill version',
+    body: publishBody,
+  })
   @Post()
   async publish(@Body() body: unknown): Promise<unknown> {
     const parsed = publishBody.safeParse(body);
@@ -51,6 +59,9 @@ export class SkillsController {
     });
   }
 
+  @Doc({
+    summary: 'List a skill\'s versions',
+  })
   @Get(':name/versions')
   async versions(@Param('name') name: string): Promise<unknown> {
     const ctx = requireContext();
@@ -64,6 +75,9 @@ export class SkillsController {
    * it. Cascading it into existing pins would be a deletion wearing a softer word, and
    * would take out running agents at a moment nobody chose.
    */
+  @Doc({
+    summary: 'Deprecate a skill version',
+  })
   @Delete(':name/versions/:version')
   async deprecate(
     @Param('name') name: string,

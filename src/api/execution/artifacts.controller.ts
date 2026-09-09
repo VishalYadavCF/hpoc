@@ -3,6 +3,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { ArtifactService } from '../../domain/artifact/artifact.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const MAX_INLINE_BYTES = 8 * 1024 * 1024;
 
@@ -25,11 +26,18 @@ const writeBody = z.object({
 export class ArtifactsController {
   constructor(private readonly artifacts: ArtifactService) {}
 
+  @Doc({
+    summary: 'Describe the artifact store',
+  })
   @Get('store')
   store(): unknown {
     return { adapters: this.artifacts.describe() };
   }
 
+  @Doc({
+    summary: 'Write an artifact',
+    body: writeBody,
+  })
   @Post()
   async write(@Body() body: unknown): Promise<unknown> {
     const parsed = writeBody.safeParse(body);
@@ -62,6 +70,9 @@ export class ArtifactsController {
     });
   }
 
+  @Doc({
+    summary: 'List artifacts',
+  })
   @Get()
   async list(
     @Query('threadId') threadId?: string,
@@ -70,11 +81,17 @@ export class ArtifactsController {
     return { artifacts: await this.artifacts.list({ threadId, runId }) };
   }
 
+  @Doc({
+    summary: 'Read artifact metadata',
+  })
   @Get(':id')
   async get(@Param('id') id: string): Promise<unknown> {
     return this.artifacts.get(id);
   }
 
+  @Doc({
+    summary: 'Download artifact content',
+  })
   @Get(':id/content')
   async content(@Param('id') id: string, @Res() res: Response): Promise<void> {
     const { stream, mediaType, sizeBytes } = await this.artifacts.stream(id);
@@ -88,23 +105,37 @@ export class ArtifactsController {
     stream.pipe(res);
   }
 
+  @Doc({
+    summary: 'List an artifact\'s versions',
+  })
   @Get(':id/versions')
   async versions(@Param('id') id: string): Promise<unknown> {
     return { versions: await this.artifacts.versions(id) };
   }
 
+  @Doc({
+    summary: 'Place a legal hold',
+    description:
+      'A held artifact cannot be deleted, including by retention (§11.2).',
+  })
   @Post(':id/legal-hold')
   async hold(@Param('id') id: string): Promise<unknown> {
     await this.artifacts.setLegalHold(id, true);
     return { legalHold: true };
   }
 
+  @Doc({
+    summary: 'Release a legal hold',
+  })
   @Delete(':id/legal-hold')
   async release(@Param('id') id: string): Promise<unknown> {
     await this.artifacts.setLegalHold(id, false);
     return { legalHold: false };
   }
 
+  @Doc({
+    summary: 'Delete an artifact',
+  })
   @Delete(':id')
   async remove(@Param('id') id: string): Promise<unknown> {
     await this.artifacts.remove(id);

@@ -4,6 +4,7 @@ import { requireContext } from '../../platform/context/platform-context.js';
 import { PeerService } from '../../domain/peer/peer.service.js';
 import { PlatformError } from '../../domain/errors/platform.errors.js';
 import type { SignedAgentCard } from '../../domain/peer/agent-card.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 const registerBody = z
   .object({
@@ -32,12 +33,16 @@ const registerBody = z
 export class PeersController {
   constructor(private readonly peers: PeerService) {}
 
+  @Doc({
+    summary: 'List A2A peers',
+  })
   @Get()
   async list(): Promise<unknown> {
     const ctx = requireContext();
     return { peers: await this.peers.list(ctx.orgId) };
   }
 
+  @Doc({ summary: 'Register an A2A peer' })
   @Post()
   async register(@Body() body: unknown): Promise<unknown> {
     const parsed = registerBody.safeParse(body);
@@ -69,18 +74,21 @@ export class PeersController {
    * a key can be rotated and a card can be replaced, and "it verified when we registered
    * it" is not a claim about now.
    */
+  @Doc({ summary: 'Verify a peer\'s agent card' })
   @Post(':name/verify-card')
   async verifyCard(@Param('name') name: string): Promise<unknown> {
     const ctx = requireContext();
     return this.peers.verifyStoredCard(ctx.orgId, name);
   }
 
+  @Doc({ summary: 'Check a peer\'s health' })
   @Get(':name/health')
   async health(@Param('name') name: string): Promise<unknown> {
     const ctx = requireContext();
     return this.peers.health(ctx.orgId, name);
   }
 
+  @Doc({ summary: 'Retire a peer' })
   @Delete(':name')
   async retire(@Param('name') name: string): Promise<unknown> {
     const ctx = requireContext();

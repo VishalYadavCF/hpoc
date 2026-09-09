@@ -27,6 +27,7 @@ import type {
   PeerTaskState,
   RunStatus,
 } from '../../platform/persistence/schema.types.js';
+import { Doc } from '../openapi/api-doc.decorator.js';
 
 /** The inverse of the local transport's mapping, at the protocol edge (§13.4). */
 const A2A_STATE: Record<RunStatus, string> = {
@@ -94,6 +95,9 @@ export class A2aController {
    * publishing a default agent's card at a well-known path would make one agent
    * accidentally canonical, and which one would depend on registration order.
    */
+  @Doc({
+    summary: 'The well-known agent card',
+  })
   @Get('.well-known/agent-card.json')
   async wellKnown(
     @Req() req: Request,
@@ -119,6 +123,9 @@ export class A2aController {
     );
   }
 
+  @Doc({
+    summary: 'Read one agent\'s card',
+  })
   @Get('a2a/v1/agents/:name/card')
   async card(
     @Req() req: Request,
@@ -131,6 +138,12 @@ export class A2aController {
   }
 
   /** The JSON-RPC entrypoint. */
+  @Doc({
+    summary: 'A2A JSON-RPC endpoint',
+    description:
+      'Another trust domain (§13.4). A peer\'s failure is contained by default rather than fatal to the caller.',
+    body: rpcRequest,
+  })
   @Post('a2a/v1')
   async rpc(
     @Req() req: Request,
@@ -217,6 +230,9 @@ export class A2aController {
    * replay-then-tail. Closing one stream affects no other because a stream is only a
    * reader of the log, and the task keeps running because the task is a run.
    */
+  @Doc({
+    summary: 'Stream a peer task\'s events',
+  })
   @Get('a2a/v1/tasks/:taskId/stream')
   async streamTask(
     @Req() req: Request,

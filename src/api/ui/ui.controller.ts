@@ -1,4 +1,5 @@
 import { Controller, Get, Header } from '@nestjs/common';
+import { ApiExcludeEndpoint } from '@nestjs/swagger';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,9 @@ export class UiController {
     'utf8',
   );
 
+  // A served HTML page, not an API surface: listing it in the reference would put a
+  // browser view among the endpoints a client integrates against.
+  @ApiExcludeEndpoint()
   @Get()
   @Header('content-type', 'text/html; charset=utf-8')
   @Header('cache-control', 'no-store')
