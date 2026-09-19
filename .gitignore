@@ -45,3 +45,4 @@ lerna-debug.log*
 
 # prisma generated client
 /src/generated
+/ai-docs/
