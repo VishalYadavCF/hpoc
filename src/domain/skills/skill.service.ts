@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { sql } from 'kysely';
 import { DB } from '../../platform/persistence/tokens.js';
 import type { Db } from '../../platform/persistence/database.js';
@@ -6,13 +7,24 @@ import { UnitOfWork } from '../../platform/persistence/unit-of-work.js';
 import type { EffectClass } from '../../platform/persistence/schema.types.js';
 import { AdmissionRejected, PlatformError } from '../errors/platform.errors.js';
 import { stableHash } from '../../platform/ids.js';
+import { OBJECT_STORE, type ObjectStore } from '../ports/object-store.port.js';
 
 export interface PublishSkillInput {
   orgId: string;
   namespaceId: string;
   name: string;
   description?: string | null;
-  instructions: string;
+  /**
+   * The two ways to give a skill its body. Exactly one must be set, matching
+   * skill_versions_content_source_chk -- a skill with both would leave every reader
+   * guessing which is current, and one with neither would publish a procedure with no
+   * content to follow.
+   */
+  instructions?: string;
+  /** An uploaded body (e.g. a SKILL.md), stored in object storage rather than this column. */
+  content?: Buffer;
+  /** Media type of `content`. Ignored when `instructions` is given. */
+  contentMediaType?: string;
   whenToUse?: string | null;
   /** Tool refs this skill brings with it. Each widens capability and is checked. */
   tools?: string[];
@@ -25,7 +37,9 @@ export interface ResolvedSkill {
   skillVersionId: string;
   name: string;
   version: number;
-  instructions: string;
+  /** Exactly one of instructions/contentUri is set -- see skill_versions_content_source_chk. */
+  instructions: string | null;
+  contentUri: string | null;
   whenToUse: string | null;
   tools: { ref: string; id: string; effects: EffectClass[] }[];
   collectionIds: string[];
@@ -51,12 +65,25 @@ export class SkillService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly uow: UnitOfWork,
+    @Inject(OBJECT_STORE) private readonly store: ObjectStore,
   ) {}
 
   async publish(input: PublishSkillInput): Promise<{ skillId: string; skillVersionId: string; version: number }> {
     const rejections: string[] = [];
-    if (input.instructions.trim().length === 0) rejections.push('instructions: must not be empty');
-    if (input.instructions.length > 64_000) rejections.push('instructions: exceeds 64000 characters');
+    if (input.instructions !== undefined && input.content !== undefined) {
+      rejections.push('instructions/content: exactly one must be given, not both');
+    } else if (input.instructions === undefined && input.content === undefined) {
+      rejections.push('instructions/content: exactly one must be given');
+    } else if (input.instructions !== undefined) {
+      if (input.instructions.trim().length === 0) rejections.push('instructions: must not be empty');
+      if (input.instructions.length > 64_000) rejections.push('instructions: exceeds 64000 characters');
+    } else if (input.content !== undefined) {
+      if (input.content.byteLength === 0) rejections.push('content: must not be empty');
+      // 5MB: generous for a skill document and its inline examples, small enough that a
+      // misdirected upload (a video, a dataset) fails loudly instead of silently becoming
+      // a skill nobody will ever fully read into context.
+      if (input.content.byteLength > 5 * 1024 * 1024) rejections.push('content: exceeds 5MB');
+    }
 
     const toolRefs = input.tools ?? [];
     const tools = toolRefs.length
@@ -101,6 +128,30 @@ export class SkillService {
 
     if (rejections.length > 0) throw new AdmissionRejected(rejections);
 
+    // Uploaded outside the transaction, same as ArtifactService.write: an object-store
+    // PUT is a network call, and holding a DB transaction open across one turns a slow
+    // MinIO into a lock-contention problem for every other publish in this namespace.
+    // The version id is minted here rather than left to the column default because the
+    // upload key needs it before the row exists -- inserting it explicitly afterwards
+    // is the same id either way, not a second source of truth.
+    const skillVersionId = input.content !== undefined ? randomUUID() : undefined;
+    const contentUri =
+      input.content !== undefined
+        ? (
+            await this.store.put(
+              // `skill-uploads/`, deliberately not `skills/`: `ObjectStoreAgentStore`'s
+              // `/skills` runtime cache (deep-agents.adapter.ts) prefix-scans
+              // `${orgId}/${namespaceId}/skills/` to discover what it has already seeded.
+              // A raw upload sharing that prefix would be swept into that scan and, not
+              // being one of its own JSON-wrapped records, fail to parse -- discovered by
+              // a genuine collision, not a hypothetical one.
+              `${input.orgId}/${input.namespaceId}/skill-uploads/${skillVersionId}`,
+              input.content,
+              input.contentMediaType ?? 'text/markdown',
+            )
+          ).uri
+        : null;
+
     return this.uow.run(async (tx) => {
       const skill = await tx
         .insertInto('skills')
@@ -129,7 +180,10 @@ export class SkillService {
       const version = (last?.max ?? 0) + 1;
 
       const specHash = stableHash({
-        instructions: input.instructions,
+        // Hashing the uploaded BYTES, not the URI: the URI is content-addressed by
+        // ObjectStore already, but hashing it here would make the spec hash depend on
+        // which bucket/adapter happened to store it rather than what the skill says.
+        instructions: input.instructions ?? input.content!.toString('base64'),
         whenToUse: input.whenToUse ?? null,
         tools: [...toolRefs].sort(),
         collections: [...collectionNames].sort(),
@@ -138,11 +192,13 @@ export class SkillService {
       const skillVersion = await tx
         .insertInto('skill_versions')
         .values({
+          ...(skillVersionId ? { id: skillVersionId } : {}),
           skill_id: skill.id,
           org_id: input.orgId,
           namespace_id: input.namespaceId,
           version,
-          instructions: input.instructions,
+          instructions: input.instructions ?? null,
+          content_uri: contentUri,
           when_to_use: input.whenToUse ?? null,
           spec_hash: specHash,
           published_by: input.publishedBy ?? null,
@@ -250,7 +306,9 @@ export class SkillService {
       let q = this.db
         .selectFrom('skill_versions as v')
         .innerJoin('skills as s', 's.id', 'v.skill_id')
-        .select(['v.id', 'v.version', 'v.instructions', 'v.when_to_use', 'v.status', 's.name'])
+        .select([
+          'v.id', 'v.version', 'v.instructions', 'v.content_uri', 'v.when_to_use', 'v.status', 's.name',
+        ])
         .where('s.namespace_id', '=', namespaceId)
         .where('s.name', '=', name)
         .where('s.archived_at', 'is', null);
@@ -292,6 +350,7 @@ export class SkillService {
         name: row.name,
         version: row.version,
         instructions: row.instructions,
+        contentUri: row.content_uri,
         whenToUse: row.when_to_use,
         tools: tools.map((t) => ({ ref: t.ref, id: t.id, effects: t.effects })),
         collectionIds: collections.map((c) => c.collection_id),

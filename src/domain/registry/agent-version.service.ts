@@ -56,7 +56,9 @@ export interface ResolvedVersion {
     skillVersionId: string;
     name: string;
     version: number;
-    instructions: string;
+    /** Exactly one of instructions/contentUri is set -- see skill_versions_content_source_chk. */
+    instructions: string | null;
+    contentUri: string | null;
     whenToUse: string | null;
   }[];
   knowledge: { collectionIds: string[]; recallLimit: number };
@@ -393,7 +395,10 @@ export class AgentVersionService {
       .selectFrom('agent_version_skills as avs')
       .innerJoin('skill_versions as sv', 'sv.id', 'avs.skill_version_id')
       .innerJoin('skills as sk', 'sk.id', 'sv.skill_id')
-      .select(['sv.id as skill_version_id', 'sk.name', 'sv.version', 'sv.instructions', 'sv.when_to_use'])
+      .select([
+        'sv.id as skill_version_id', 'sk.name', 'sv.version',
+        'sv.instructions', 'sv.content_uri', 'sv.when_to_use',
+      ])
       .where('avs.agent_version_id', '=', id)
       .orderBy('avs.ord')
       .execute();
@@ -476,6 +481,7 @@ export class AgentVersionService {
         name: sk.name,
         version: sk.version,
         instructions: sk.instructions,
+        contentUri: sk.content_uri,
         whenToUse: sk.when_to_use,
       })),
       knowledge: { collectionIds, recallLimit: spec.knowledge?.recallLimit ?? 5 },

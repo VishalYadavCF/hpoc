@@ -6,6 +6,7 @@ import { AgentService } from '../src/domain/agent/agent.service.js';
 import { AgentVersionService } from '../src/domain/registry/agent-version.service.js';
 import { AdmissionService } from '../src/domain/admission/admission.service.js';
 import { SkillService } from '../src/domain/skills/skill.service.js';
+import { FilesystemObjectStore } from '../src/adapters/storage/filesystem.object-store.js';
 import { PeerService } from '../src/domain/peer/peer.service.js';
 import { PromptService } from '../src/domain/prompt/prompt.service.js';
 import { McpRegistryService } from '../src/domain/mcp/mcp-registry.service.js';
@@ -44,7 +45,7 @@ const grant = (kind: 'tool', id: string) =>
 beforeAll(async () => {
   f = await fixture();
   const uow = new UnitOfWork(f.db);
-  const skills = new SkillService(f.db, uow);
+  const skills = new SkillService(f.db, uow, new FilesystemObjectStore());
   const prompts = new PromptService(f.db, uow);
   const peers = new PeerService(f.db);
   const admission = new AdmissionService(f.db, skills, peers, prompts, new PolicyService(f.db, uow));

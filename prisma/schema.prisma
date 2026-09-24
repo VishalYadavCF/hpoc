@@ -1323,7 +1323,7 @@ model tools {
   tool_templates                                                      tool_templates?       @relation(fields: [template_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([org_id, ref, version])
-  @@unique([org_id, spec_hash], map: "tools_instantiated_hash_idx", where: raw("(spec_hash IS NOT NULL)"))
+  @@unique([org_id, spec_hash], map: "tools_instantiated_hash_idx")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -1505,12 +1505,13 @@ model skill_versions {
   org_id                    String                      @db.Uuid
   namespace_id              String                      @db.Uuid
   version                   Int
-  instructions              String
+  instructions              String?
   when_to_use               String?
   spec_hash                 String
   status                    registry_status             @default(active)
   published_by              String?                     @db.Uuid
   published_at              DateTime                    @default(now()) @db.Timestamptz(6)
+  content_uri               String?
   agent_version_skills      agent_version_skills[]
   skill_version_collections skill_version_collections[]
   skill_version_tools       skill_version_tools[]

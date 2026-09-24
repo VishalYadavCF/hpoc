@@ -142,9 +142,20 @@ function connectionFor(server: McpServerRef): Connection {
     url: server.endpointUrl,
     // Already minted by the broker (§16.3). This client never sees a credential it could
     // pass through, which is what §13.2 forbids.
-    headers: { ...server.headers, 'MCP-Protocol-Version': server.protocolRevision },
-    // The revision is pinned, so the fallback to the older SSE transport must not fire --
-    // silently downgrading the protocol is how a pinned revision stops meaning anything.
+    //
+    // `MCP-Protocol-Version` is deliberately NOT set here. The SDK's Streamable HTTP transport
+    // sets that header itself from the version it negotiated during `initialize`, so adding our
+    // own produced TWO header values, which arrive comma-joined:
+    //
+    //   Bad Request: Unsupported protocol version: 2025-11-25, 2025-06-18
+    //
+    // Every request after `initialize` failed, so tool discovery was impossible against any
+    // server whose SDK sets the header — i.e. every current one. Matching the pinned revision to
+    // the negotiated one does not help; the value is still two tokens ("2025-11-25, 2025-11-25").
+    headers: { ...server.headers },
+    // What actually keeps the pinned revision meaningful: without this a failed Streamable HTTP
+    // attempt silently downgrades to the older SSE transport, and a pinned revision stops meaning
+    // anything. This is the guard the header was mistakenly thought to provide.
     automaticSSEFallback: false,
   };
 }

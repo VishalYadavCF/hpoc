@@ -96,7 +96,11 @@ export abstract class LangChainProvider implements ModelProvider {
    *
    * `ToolSchema.parameters` is JSON Schema, which is what every vendor's function-calling
    * API wants; the OpenAI function envelope is the shape LangChain normalises FROM for
-   * all three vendors, so no per-vendor branch is needed here.
+   * all three vendors.
+   *
+   * It is NOT true that no per-vendor branch is needed, which this comment used to claim.
+   * Gemini accepts a restricted subset and rejects the whole request over constructs that are
+   * ordinary JSON Schema elsewhere, so `toolParameters` is the seam for narrowing per vendor.
    */
   private bind(model: BaseChatModel, request: ModelRequest): BaseChatModel {
     if (!request.tools?.length) return model;
@@ -109,9 +113,18 @@ export abstract class LangChainProvider implements ModelProvider {
     return model.bindTools(
       request.tools.map((t) => ({
         type: 'function' as const,
-        function: { name: t.name, description: t.description, parameters: t.parameters },
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: this.toolParameters(t.parameters),
+        },
       })),
     ) as unknown as BaseChatModel;
+  }
+
+  /** Per-vendor narrowing of a tool's JSON Schema. Identity unless a vendor needs less. */
+  protected toolParameters(parameters: Record<string, unknown>): Record<string, unknown> {
+    return parameters;
   }
 }
 
@@ -161,6 +174,61 @@ export class GoogleProvider extends LangChainProvider {
       ...(credentials['baseUrl'] ? { baseUrl: credentials['baseUrl'] } : {}),
     });
   }
+
+  protected override toolParameters(parameters: Record<string, unknown>): Record<string, unknown> {
+    return geminiSafeSchema(parameters) as Record<string, unknown>;
+  }
+}
+
+/**
+ * JSON Schema keywords Gemini's function-declaration proto has no field for. It rejects the
+ * WHOLE request rather than ignoring them, so they are removed rather than passed and hoped for.
+ */
+const GEMINI_UNSUPPORTED_KEYWORDS = new Set([
+  '$schema',
+  '$id',
+  'additionalProperties',
+  'const',
+  'default',
+  'examples',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'patternProperties',
+  'definitions',
+  '$defs',
+]);
+
+/**
+ * Narrows ordinary JSON Schema to the subset Gemini accepts.
+ *
+ * Two things bite in practice, both produced by perfectly normal Zod:
+ *
+ *  - `z.string().nullable()` becomes `type: ["string", "null"]`. Gemini's proto types `type` as a
+ *    single enum value, so an array is "Proto field is not repeating, cannot start list" and the
+ *    entire request 400s — one nullable field on one tool takes down the whole run.
+ *  - Keywords above have no proto field at all, and are likewise fatal rather than ignored.
+ *
+ * Nullability is dropped rather than encoded: Gemini expresses optionality through `required`,
+ * which survives untouched, so a field that was nullable simply becomes optional-with-a-type.
+ */
+function geminiSafeSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(geminiSafeSchema);
+  if (!node || typeof node !== 'object') return node;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (GEMINI_UNSUPPORTED_KEYWORDS.has(key)) continue;
+
+    if (key === 'type' && Array.isArray(value)) {
+      const concrete = value.find((t) => t !== 'null');
+      // A type that was ONLY "null" carries no information Gemini can act on; string is the
+      // least surprising stand-in, and the field stays optional via `required`.
+      out[key] = concrete ?? 'string';
+      continue;
+    }
+    out[key] = geminiSafeSchema(value);
+  }
+  return out;
 }
 
 /**

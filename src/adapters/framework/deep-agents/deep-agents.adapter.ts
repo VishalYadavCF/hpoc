@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
+  CompositeBackend,
+  StoreBackend,
   createDeepAgent,
   createHarnessProfile,
   createMemoryMiddleware,
@@ -18,11 +20,17 @@ import type {
   RunHost,
   RunOutcome,
   RunSession,
+  SkillHandle,
 } from '../../../domain/ports/framework-adapter.port.js';
 import type { SubAgent } from 'deepagents';
+import { requireContext } from '../../../platform/context/platform-context.js';
+import { OBJECT_STORE, type ObjectStore } from '../../../domain/ports/object-store.port.js';
 import { PostgresCheckpointSaver } from './postgres.checkpoint-saver.js';
+import { ObjectStoreAgentStore } from './object-store-agent-store.js';
+import { ArtifactRecordingStore } from './artifact-recording.store.js';
+import { ReadOnlyStore } from './read-only.store.js';
 import { HostChatModel } from './host-chat-model.js';
-import { PlatformBackend } from './platform.backend.js';
+import { PlatformBackend, skillDocument, slug } from './platform.backend.js';
 
 /**
  * The real `deepagents` binding.
@@ -87,7 +95,11 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
   readonly id = 'deep-agents';
   private readonly log = new Logger(DeepAgentsAdapter.name);
 
-  constructor(@Inject(PostgresCheckpointSaver) private readonly checkpointer: PostgresCheckpointSaver) {}
+  constructor(
+    @Inject(PostgresCheckpointSaver) private readonly checkpointer: PostgresCheckpointSaver,
+    @Inject(ObjectStoreAgentStore) private readonly agentStore: ObjectStoreAgentStore,
+    @Inject(OBJECT_STORE) private readonly objectStore: ObjectStore,
+  ) {}
 
   async run(session: RunSession): Promise<RunOutcome> {
     const { spec, host } = session;
@@ -100,6 +112,54 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
     // own middleware reads. See `PlatformBackend` for why a filesystem, and for what
     // stays above it.
     const backend = new PlatformBackend(spec);
+
+    // `/workspace` is the one path `PlatformBackend` does NOT keep in-memory-only anymore:
+    // routed to a MinIO-backed `BaseStore`, namespaced per conversation thread rather than
+    // per run, so a scratch file survives both a worker crash mid-drive AND the run that
+    // wrote it finishing -- the actual bug this exists to fix (see `PlatformBackend`'s own
+    // "Honest limit" note, written when this was still deferred work). `/memory` and
+    // `/knowledge` stay on `backend` unchanged below: those are resolved fresh from
+    // Postgres every run, so persisting them would be wrong, not merely unnecessary.
+    const ctx = requireContext();
+    const workspaceStore = new ArtifactRecordingStore(this.agentStore, host);
+    const workspaceBackend = new StoreBackend({
+      store: workspaceStore,
+      namespace: [ctx.orgId, ctx.namespaceId, ctx.tenantRef, 'threads', session.threadId, 'workspace'],
+    });
+
+    // `/skills` also routes here, but namespaced per NAMESPACE rather than per thread --
+    // skill content is immutable per version and shared by every run in this namespace,
+    // not scoped to one conversation. `seedSkills` below keys each one by name@version and
+    // skips the write once it is already present, so an already-seeded skill costs one
+    // existence check per run rather than a re-upload of unchanged bytes.
+    //
+    // TWO backends share this namespace, not one: seeding writes through the unwrapped
+    // store, and the route the model actually reaches is wrapped in `ReadOnlyStore`. A
+    // generic `StoreBackend` has no per-path write guard the way `PlatformBackend`'s old
+    // in-memory map did -- without this, `edit_file` on a skill would silently succeed and
+    // corrupt the cached body every future run in the namespace reads back (§17.2: a skill
+    // is a governed, versioned artifact, and this is the property that made that true when
+    // skills lived on an in-memory map with its own `readOnly: Set<string>` guard).
+    const skillsNamespace = [ctx.orgId, ctx.namespaceId, 'skills'];
+    const skillsSeedBackend = new StoreBackend({ store: this.agentStore, namespace: skillsNamespace });
+    await this.seedSkills(spec.skills, skillsSeedBackend);
+    const skillsBackend = new StoreBackend({
+      store: new ReadOnlyStore(this.agentStore),
+      namespace: skillsNamespace,
+    });
+
+    // Trailing slash on both route keys, deliberately: `CompositeBackend.getBackendAndKey`
+    // strips the registered prefix with a plain `substring`, and a prefix with no trailing
+    // slash leaves the `/` before the next segment in the stripped key -- which then gets
+    // a SECOND `/` prepended, handing the routed backend `//report.md` for a write to
+    // `/workspace/report.md`. Registering `/workspace/`/`/skills/` consumes that slash as
+    // part of the prefix instead, so the routed backend sees the single-slash path its own
+    // `write`/`read` calls (seedSkills below, StoreBackend's write() for /workspace) agree
+    // with. Confirmed both ways against the library directly before choosing this fix.
+    const compositeBackend = new CompositeBackend(backend, {
+      '/workspace/': workspaceBackend,
+      '/skills/': skillsBackend,
+    });
 
     // §17.2/§17.3 shaping, computed from the pinned policy and prompt. DeepAgents' own
     // vocabulary for this, built from OUR registries.
@@ -136,13 +196,21 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
         base: spec.systemPrompt ?? undefined,
         ...(profile.systemPromptSuffix ? { suffix: profile.systemPromptSuffix } : {}),
       },
-      backend,
+      // The composite, not the raw `backend`: `/workspace` and `/skills` both route to
+      // MinIO now. `/memory`/`/knowledge` still resolve through `PlatformBackend` directly
+      // -- unlike skills, those are never read lazily by a tool call, so there is nothing
+      // for a route to intercept, and the memory/summarization middleware below keep using
+      // `backend` accordingly.
+      backend: compositeBackend,
       middleware: [
         // Progressive disclosure: names and descriptions go in the prompt, bodies are
-        // read on demand. This is the behavioural change Phase 4 is for -- the platform
-        // no longer concatenates every pinned skill's full text into every turn.
+        // read on demand -- by the model, via `read_file` through THIS run's composite, not
+        // by this middleware fetching them upfront. `backend.skillSources()`/`skillPath()`
+        // still answer from `PlatformBackend`'s own (content-free) view of which names are
+        // pinned; only the discovery/read backend needs to be the composite, since that is
+        // what actually reaches the MinIO-backed `/skills/` route seeded above.
         ...(backend.skillSources().length
-          ? [createSkillsMiddleware({ backend, sources: backend.skillSources() })]
+          ? [createSkillsMiddleware({ backend: compositeBackend, sources: backend.skillSources() })]
           : []),
         // Memory and knowledge DO go in the prompt whole: unlike a skill, a recalled fact
         // is not a procedure the model can decide it does not need -- it cannot know that
@@ -249,6 +317,32 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
       this.log.warn(`run ${session.runId} failed inside the graph: ${(e as Error).message}`);
       return { type: 'fail', message: (e as Error).message };
     }
+  }
+
+  /**
+   * Ensures every pinned skill's body is present in the MinIO-backed `/skills` store,
+   * keyed by name@slug so it agrees with `PlatformBackend.skillPath`/`skillSources`.
+   *
+   * Skipped once a skill is already there: content is immutable per version (§17.2), so
+   * after the first run anywhere in this namespace ever uses a given version, every later
+   * run pays one existence check rather than a re-render or re-upload of unchanged bytes.
+   * Legacy (JSON-authored) skills render through `skillDocument`, the same text
+   * `PlatformBackend` used to seed directly; an uploaded skill's bytes are fetched once
+   * from its `contentUri` and stored as-is -- it is already a complete file.
+   */
+  private async seedSkills(skills: SkillHandle[], skillsBackend: StoreBackend): Promise<void> {
+    await Promise.all(
+      skills.map(async (skill) => {
+        const path = `/${slug(skill.name)}/SKILL.md`;
+        const existing = await skillsBackend.read(path);
+        if (!existing.error) return;
+        const content =
+          skill.contentUri !== null
+            ? (await this.objectStore.get(skill.contentUri)).toString('utf8')
+            : skillDocument(skill);
+        await skillsBackend.write(path, content);
+      }),
+    );
   }
 
   /**

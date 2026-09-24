@@ -3,7 +3,9 @@ import type {
   DeleteResult,
   EditResult,
   FileData,
+  FileDownloadResponse,
   FileInfo,
+  FileUploadResponse,
   GlobResult,
   GrepMatch,
   GrepResult,
@@ -17,6 +19,7 @@ import type {
   RecalledMemory,
   SkillHandle,
 } from '../../../domain/ports/framework-adapter.port.js';
+import { PlatformError } from '../../../domain/errors/platform.errors.js';
 
 /**
  * The platform's resolved context, projected as a filesystem DeepAgents can read.
@@ -44,28 +47,33 @@ import type {
  * ## Layout
  *
  * ```
- *   /skills/<name>/SKILL.md      one per pinned skill, with frontmatter
  *   /memory/<tier>.md            one per recalled memory tier
  *   /knowledge/retrieved.md      what knowledge search returned this run
- *   /workspace/...               scratch, writable, empty at start
+ *   /workspace/...               scratch, MinIO-backed (see deep-agents.adapter.ts)
  * ```
+ *
+ * `/skills/` is deliberately NOT projected here. It routes to a MinIO-backed `StoreBackend`
+ * the same way `/workspace` does -- see `deep-agents.adapter.ts`'s `CompositeBackend`
+ * wiring -- because a skill's body is now read on demand from wherever it actually lives
+ * (a JSON-authored row rendered fresh, or an uploaded file streamed from object storage),
+ * not eagerly concatenated into an in-memory map at construction time. This class keeps
+ * only enough about skills to answer `skillPath`/`skillSources` (see below) -- the names,
+ * not the bodies.
  *
  * ## Honest limit
  *
- * Writes live in this object, which lives for one drive. Scratch files do NOT survive a
- * suspension -- the projection is rebuilt on resume and `/workspace` comes back empty.
- * Persisting them means putting them in graph state or the artifact store, which is a
- * different decision than this one and is deferred rather than half-done.
+ * `/workspace` writes are durable (§11.2); `/memory` and `/knowledge` are not, and are not
+ * meant to be -- both are resolved fresh from Postgres every run, so re-seeding them on
+ * resume is correct, not a gap.
  */
 export class PlatformBackend implements BackendProtocolV2 {
   private readonly files = new Map<string, string>();
   /** Paths the platform owns. Refusing writes here keeps the projection honest. */
   private readonly readOnly = new Set<string>();
+  private readonly skillNames: Set<string>;
 
   constructor(spec: AgentSpecView) {
-    for (const skill of spec.skills) {
-      this.seed(`/skills/${slug(skill.name)}/SKILL.md`, skillDocument(skill));
-    }
+    this.skillNames = new Set(spec.skills.map((s) => slug(s.name)));
     for (const [tier, records] of groupByTier(spec.recalled)) {
       this.seed(`/memory/${slug(tier)}.md`, memoryDocument(tier, records));
     }
@@ -89,9 +97,25 @@ export class PlatformBackend implements BackendProtocolV2 {
    *
    * The prefix keeps them out of the parent's `/skills/` scan, so the caller's model is
    * not offered procedures belonging to an agent it merely delegates to.
+   *
+   * Only JSON-authored (`instructions`-carrying) skills. An UPLOADED skill pinned to a
+   * sub-agent is a known, documented gap rather than a silent one: this path still
+   * projects synchronously into an in-memory map, and streaming an uploaded body in here
+   * would need the same MinIO routing `/skills/` and `/workspace` already get, which this
+   * class deliberately does not do for the sub-agent tree yet. Failing loudly here is
+   * better than a sub-agent quietly reasoning without the procedure its author pinned to
+   * it -- the exact failure mode this method exists to prevent for the JSON-authored case.
    */
   seedSubAgentSkills(alias: string, skills: SkillHandle[]): string[] {
     if (skills.length === 0) return [];
+    const uploaded = skills.filter((s) => s.contentUri !== null);
+    if (uploaded.length > 0) {
+      throw new PlatformError(
+        'internal',
+        `Sub-agent "${alias}" is pinned an uploaded skill (${uploaded.map((s) => s.name).join(', ')}), ` +
+          'which is not yet supported for in-process sub-agents -- only for the main agent.',
+      );
+    }
     const root = `/agents/${slug(alias)}/skills/`;
     for (const skill of skills) {
       this.seed(`${root}${slug(skill.name)}/SKILL.md`, skillDocument(skill));
@@ -106,13 +130,12 @@ export class PlatformBackend implements BackendProtocolV2 {
    * name a skill into existence -- the projection contains only what admission resolved.
    */
   skillPath(name: string): string | undefined {
-    const path = `/skills/${slug(name)}/SKILL.md`;
-    return this.files.has(path) ? `/skills/${slug(name)}/` : undefined;
+    return this.skillNames.has(slug(name)) ? `/skills/${slug(name)}/` : undefined;
   }
 
   /** Paths the skills middleware should scan; empty when the version pinned none. */
   skillSources(): string[] {
-    return [...this.files.keys()].some((p) => p.startsWith('/skills/')) ? ['/skills/'] : [];
+    return this.skillNames.size > 0 ? ['/skills/'] : [];
   }
 
   /** Paths the memory middleware should load, in a stable order. */
@@ -218,19 +241,60 @@ export class PlatformBackend implements BackendProtocolV2 {
     if (!this.files.delete(filePath)) return { error: `File not found: ${filePath}` };
     return { path: filePath };
   }
+
+  /**
+   * Not something a run of this class ever calls directly -- the gap that mattered was
+   * `CompositeBackend`'s OWN `downloadFiles`/`uploadFiles`, which exist unconditionally on
+   * that class regardless of what its routes support (see `deep-agents.adapter.ts`'s note
+   * on why `/workspace` is routed there). Once this class sits behind a `CompositeBackend`,
+   * any framework code that duck-types `if (backend.downloadFiles)` sees one on the
+   * composite and calls it, which throws for a path that resolves to a route lacking the
+   * method -- silently, in `listSkillsFromBackend`'s case, which swallows the error into a
+   * `console.debug` and returns no skills. Implementing both here, even though nothing in
+   * this class's own flow needs them, is what keeps every skill/memory/knowledge read
+   * working once `/workspace` exists as a sibling route.
+   */
+  async downloadFiles(paths: string[]): Promise<FileDownloadResponse[]> {
+    return paths.map((path) => {
+      const content = this.files.get(path);
+      return content === undefined
+        ? { path, content: null, error: 'file_not_found' as const }
+        : { path, content: new TextEncoder().encode(content), error: null };
+    });
+  }
+
+  async uploadFiles(files: Array<[string, Uint8Array]>): Promise<FileUploadResponse[]> {
+    return files.map(([path, bytes]) => {
+      if (this.readOnly.has(path)) return { path, error: 'permission_denied' as const };
+      this.files.set(path, new TextDecoder().decode(bytes));
+      return { path, error: null };
+    });
+  }
 }
 
 /** Fixed, because a projection has no meaningful mtime and a moving one breaks caching. */
 const EPOCH = '1970-01-01T00:00:00.000Z';
 
 /**
- * A SKILL.md the skills middleware can parse.
+ * A SKILL.md the skills middleware can parse, for a JSON-authored skill.
  *
  * `description` carries `whenToUse`, because that is the field the middleware shows in the
  * prompt and therefore the only thing the model has to decide on before reading the body.
  * A skill whose author wrote no `whenToUse` gets a generic line -- worse, but not silent.
+ *
+ * Only for `instructions`-carrying skills -- an uploaded one (`contentUri` set) is already
+ * a complete file and is streamed as-is (see `deep-agents.adapter.ts`'s skill seeding),
+ * never rendered through this. Called with one anyway is a caller bug, not a data case to
+ * degrade gracefully for -- silently rendering "null" into a skill body is worse than
+ * throwing where the mistake was made.
  */
-function skillDocument(skill: SkillHandle): string {
+export function skillDocument(skill: SkillHandle): string {
+  if (skill.instructions === null) {
+    throw new PlatformError(
+      'internal',
+      `skillDocument called for "${skill.name}", which has no instructions (it is an uploaded skill)`,
+    );
+  }
   const description = skill.whenToUse ?? `The ${skill.name} procedure.`;
   return (
     `---\nname: ${slug(skill.name)}\ndescription: ${oneLine(description)}\n---\n\n` +
@@ -265,8 +329,15 @@ function groupByTier(recalled: RecalledMemory[]): Map<string, RecalledMemory[]> 
   return byTier;
 }
 
-/** POSIX path segment from author-chosen text, with no way to escape the directory. */
-const slug = (name: string): string =>
+/**
+ * POSIX path segment from author-chosen text, with no way to escape the directory.
+ *
+ * Exported: `deep-agents.adapter.ts`'s skill seeding computes the SAME path
+ * (`/skills/${slug(name)}/SKILL.md`) that `skillPath`/`skillSources` above hand to the
+ * model, and the two must agree exactly -- a second, slightly different slugifier here
+ * would seed one path and advertise another.
+ */
+export const slug = (name: string): string =>
   name.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[.-]+/, '') || 'unnamed';
 
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim();

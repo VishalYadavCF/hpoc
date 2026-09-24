@@ -27,7 +27,16 @@ export interface SkillHandle {
   name: string;
   version: number;
   whenToUse: string | null;
-  instructions: string;
+  /**
+   * Exactly one of instructions/contentUri is set (skill_versions_content_source_chk).
+   * `instructions` is the JSON-authored body, resolved eagerly like everything else here.
+   * `contentUri` is an uploaded body's `ObjectStore` URI, deliberately NOT resolved into
+   * this view -- a framework adapter reads it lazily (see `PlatformBackend`'s `/skills`
+   * routing), which is the whole reason an upload path exists instead of just being a
+   * second way to fill `instructions`.
+   */
+  instructions: string | null;
+  contentUri: string | null;
 }
 
 /** A chunk retrieved from an authored corpus, kept distinct from RecalledMemory. */
@@ -285,6 +294,26 @@ export interface RunHost {
    */
   saveState(state: unknown): void;
   /**
+   * Records agent-authored content as a first-class, API-discoverable artifact --
+   * `GET /v1/artifacts`, downloadable, subject to retention and legal hold.
+   *
+   * Deliberately NOT routed through `callTool`: a `/workspace` file write is not a tool
+   * call and, per `PlatformBackend`'s own note, produces no `steps` row -- it happens
+   * inside DeepAgents' own filesystem middleware, which never reaches this host at all
+   * except through this one narrow door. No budget check, no lease fencing, no effect
+   * contract: there is nothing here for those to apply to, the same as `saveState`.
+   *
+   * Best-effort BY CONTRACT, not by accident: a caller must not let this failing take
+   * down the write that already durably succeeded elsewhere. Implementations should not
+   * throw for a recording failure; a framework adapter calling this should not treat a
+   * rejection as fatal either.
+   */
+  recordArtifact(input: {
+    body: Buffer;
+    mediaType: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void>;
+  /**
    * A host scoped to an `inline` sub-agent, or null when the alias is not one.
    *
    * Everything the returned host does is attributed to the CHILD's version: its model
@@ -303,6 +332,14 @@ export interface RunHost {
 
 export interface RunSession {
   runId: string;
+  /**
+   * The conversation this run belongs to. A conversation may span many runs; this is what
+   * lets an adapter give a mechanism (persistent workspace storage, cross-run memory) a
+   * lifetime longer than one drive without conflating it with `runId`, which the graph's
+   * own `thread_id` (§4.2) is deliberately pinned to instead -- see
+   * `DeepAgentsAdapter.run`'s comment on why those two must not be the same value.
+   */
+  threadId: string;
   spec: AgentSpecView;
   input: unknown;
   /**

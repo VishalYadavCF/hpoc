@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Readable } from 'node:stream';
 import type { ObjectStore, StoredObject } from '../../domain/ports/object-store.port.js';
@@ -51,6 +51,32 @@ export class FilesystemObjectStore implements ObjectStore {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Raw string-prefix match, not directory listing -- the two disagree on a prefix that is
+   * only a partial path segment (`org/works` matching `org/workspace/a.txt`). Matching that
+   * is what keeps this interchangeable with `MinioObjectStore.list`, which hands `prefix`
+   * straight to S3's own `listObjectsV2` and gets exactly that behaviour for free. A single
+   * root walk per call, because this adapter's own docstring already scopes it to
+   * single-node development -- an S3 deployment does the real listing on its own index.
+   */
+  async list(prefix: string): Promise<{ key: string; uri: string }[]> {
+    let entries: string[];
+    try {
+      entries = await readdir(this.root, { recursive: true });
+    } catch {
+      return [];
+    }
+    const found: { key: string; uri: string }[] = [];
+    for (const entry of entries) {
+      const path = resolve(this.root, entry);
+      const key = relative(this.root, path).split(sep).join('/');
+      if (!key.startsWith(prefix)) continue;
+      if ((await stat(path)).isDirectory()) continue;
+      found.push({ key, uri: pathToFileURL(path).href });
+    }
+    return found;
   }
 
   /**

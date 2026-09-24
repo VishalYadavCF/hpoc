@@ -24,4 +24,11 @@ export interface ObjectStore {
   stream(uri: string): Promise<Readable>;
   delete(uri: string): Promise<void>;
   exists(uri: string): Promise<boolean>;
+  /**
+   * Every key stored under `prefix`, each with the `uri` `get`/`stream`/`delete`/`exists`
+   * expect. A `prefix` with nothing under it -- including one that was never written to --
+   * returns `[]` rather than erroring, matching what `exists()` already does for a single
+   * key: absence is a normal answer, not a failure.
+   */
+  list(prefix: string): Promise<{ key: string; uri: string }[]>;
 }

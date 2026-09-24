@@ -7,6 +7,7 @@ import { PolicyService } from '../src/domain/policy/policy.service.js';
 import { AdmissionService } from '../src/domain/admission/admission.service.js';
 import { PromptService } from '../src/domain/prompt/prompt.service.js';
 import { SkillService } from '../src/domain/skills/skill.service.js';
+import { FilesystemObjectStore } from '../src/adapters/storage/filesystem.object-store.js';
 import { LocalPeerTransport } from '../src/domain/peer/local.peer-transport.js';
 import { RemotePeerTransport } from '../src/adapters/peer/remote.peer-transport.js';
 import { PeerRouter } from '../src/domain/peer/peer.router.js';
@@ -44,7 +45,7 @@ beforeAll(async () => {
   f = await fixture();
   peers = new PeerService(f.db);
   const uow = new UnitOfWork(f.db);
-  const skills = new SkillService(f.db, uow);
+  const skills = new SkillService(f.db, uow, new FilesystemObjectStore());
   admission = new AdmissionService(f.db, skills, peers, new PromptService(f.db, uow), new PolicyService(f.db, uow));
   const versions = new AgentVersionService(f.db);
   router = new PeerRouter(

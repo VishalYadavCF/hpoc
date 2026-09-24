@@ -16,6 +16,7 @@ class FakeHost implements RunHost {
   readonly delegations: { alias: string; input: unknown }[] = [];
   readonly peerCalls: { alias: string; input: unknown }[] = [];
   saved: unknown = null;
+  readonly recordedArtifacts: Parameters<RunHost['recordArtifact']>[0][] = [];
 
   constructor(
     private readonly toolOutcome: HostToolOutcome = { kind: 'ok', output: { ok: true } },
@@ -40,6 +41,9 @@ class FakeHost implements RunHost {
   }
   saveState(state: unknown) {
     this.saved = state;
+  }
+  async recordArtifact(input: Parameters<RunHost['recordArtifact']>[0]) {
+    this.recordedArtifacts.push(input);
   }
   /** The echo adapter has no in-process sub-agents; the port still requires the method. */
   forSubAgent(): RunHost | null {
@@ -66,6 +70,7 @@ const spec = (over: Partial<AgentSpecView> = {}): AgentSpecView => ({
 
 const session = (host: RunHost, over: Partial<RunSession> = {}): RunSession => ({
   runId: 'r1',
+  threadId: 't1',
   spec: spec(),
   input: 'hello',
   state: null,

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sql } from 'kysely';
 import { UnitOfWork } from '../src/platform/persistence/unit-of-work.js';
 import { SkillService } from '../src/domain/skills/skill.service.js';
+import { FilesystemObjectStore } from '../src/adapters/storage/filesystem.object-store.js';
 import { PolicyService } from '../src/domain/policy/policy.service.js';
 import { AdmissionService } from '../src/domain/admission/admission.service.js';
 import { PromptService } from '../src/domain/prompt/prompt.service.js';
@@ -30,7 +31,7 @@ let collectionId: string;
 beforeAll(async () => {
   f = await fixture();
   const uow = new UnitOfWork(f.db);
-  skills = new SkillService(f.db, uow);
+  skills = new SkillService(f.db, uow, new FilesystemObjectStore());
   admission = new AdmissionService(f.db, skills, new PeerService(f.db), new PromptService(f.db, uow), new PolicyService(f.db, uow));
   versions = new AgentVersionService(f.db);
   const embedder = new DeterministicEmbedder();
@@ -307,5 +308,99 @@ describe('authorisation defaults', () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(AdmissionRejected);
     expect((error as AdmissionRejected).rejections.join('\n')).toContain(name);
+  });
+});
+
+describe('uploaded skills (streamed from object storage, not typed as JSON)', () => {
+  it('publishing with content stores it in object storage and leaves instructions null', async () => {
+    const name = `uploaded-${SUFFIX}`;
+    const published = await skills.publish({
+      orgId: f.orgId,
+      namespaceId: f.namespaceId,
+      name,
+      content: Buffer.from('---\nname: uploaded\n---\n\nDo the uploaded thing.', 'utf8'),
+      whenToUse: 'when the customer asks for the uploaded thing',
+    });
+
+    const { resolved } = await skills.resolve(f.namespaceId, [name]);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]!.instructions).toBeNull();
+    expect(resolved[0]!.contentUri).toBeTruthy();
+    expect(resolved[0]!.skillVersionId).toBe(published.skillVersionId);
+  });
+
+  it('the stored content_uri round-trips the exact uploaded bytes', async () => {
+    const name = `uploaded-roundtrip-${SUFFIX}`;
+    const body = '---\nname: roundtrip\n---\n\nExact bytes, verified below.';
+    await skills.publish({
+      orgId: f.orgId,
+      namespaceId: f.namespaceId,
+      name,
+      content: Buffer.from(body, 'utf8'),
+    });
+
+    const { resolved } = await skills.resolve(f.namespaceId, [name]);
+    const store = new FilesystemObjectStore();
+    const fetched = await store.get(resolved[0]!.contentUri!);
+    expect(fetched.toString('utf8')).toBe(body);
+  });
+
+  it('rejects a publish given neither instructions nor content', async () => {
+    await expect(
+      skills.publish({
+        orgId: f.orgId,
+        namespaceId: f.namespaceId,
+        name: `neither-${SUFFIX}`,
+      }),
+    ).rejects.toThrow(AdmissionRejected);
+  });
+
+  it('rejects a publish given both instructions and content', async () => {
+    await expect(
+      skills.publish({
+        orgId: f.orgId,
+        namespaceId: f.namespaceId,
+        name: `both-${SUFFIX}`,
+        instructions: 'text',
+        content: Buffer.from('bytes'),
+      }),
+    ).rejects.toThrow(AdmissionRejected);
+  });
+
+  it('rejects empty content the same way it rejects empty instructions', async () => {
+    await expect(
+      skills.publish({
+        orgId: f.orgId,
+        namespaceId: f.namespaceId,
+        name: `empty-content-${SUFFIX}`,
+        content: Buffer.alloc(0),
+      }),
+    ).rejects.toThrow(AdmissionRejected);
+  });
+
+  it('rejects content over the 5MB limit', async () => {
+    await expect(
+      skills.publish({
+        orgId: f.orgId,
+        namespaceId: f.namespaceId,
+        name: `oversized-${SUFFIX}`,
+        content: Buffer.alloc(5 * 1024 * 1024 + 1),
+      }),
+    ).rejects.toThrow(AdmissionRejected);
+  });
+
+  it('an uploaded skill is admitted and readable by a run exactly like a JSON-authored one', async () => {
+    const name = `uploaded-admit-${SUFFIX}`;
+    await skills.publish({
+      orgId: f.orgId,
+      namespaceId: f.namespaceId,
+      name,
+      content: Buffer.from('---\nname: uploaded-admit\n---\n\nProcedure body.', 'utf8'),
+      whenToUse: 'uploaded skill admission check',
+      publishedBy: f.principalId,
+    });
+
+    const admitted = await admit({ skills: [name], systemPrompt: `uploaded-admit-${SUFFIX}` });
+    expect(admitted.skills.map((s) => s.name)).toEqual([name]);
   });
 });

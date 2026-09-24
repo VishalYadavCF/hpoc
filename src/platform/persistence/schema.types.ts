@@ -400,7 +400,10 @@ export interface SkillsTable {
 
 export interface SkillVersionsTable {
   id: Generated<string>; skill_id: string; org_id: string; namespace_id: string;
-  version: number; instructions: string; when_to_use: string | null;
+  version: number;
+  /** Exactly one of instructions/content_uri is set (skill_versions_content_source_chk). */
+  instructions: string | null; content_uri: string | null;
+  when_to_use: string | null;
   spec_hash: string; status: Generated<RegistryStatus>;
   published_by: string | null; published_at: TsD;
 }

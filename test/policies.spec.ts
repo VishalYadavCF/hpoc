@@ -3,6 +3,7 @@ import { UnitOfWork } from '../src/platform/persistence/unit-of-work.js';
 import { PolicyService } from '../src/domain/policy/policy.service.js';
 import { PromptService } from '../src/domain/prompt/prompt.service.js';
 import { SkillService } from '../src/domain/skills/skill.service.js';
+import { FilesystemObjectStore } from '../src/adapters/storage/filesystem.object-store.js';
 import { PeerService } from '../src/domain/peer/peer.service.js';
 import { AdmissionService } from '../src/domain/admission/admission.service.js';
 import { AgentVersionService } from '../src/domain/registry/agent-version.service.js';
@@ -52,7 +53,7 @@ beforeAll(async () => {
   const uow = new UnitOfWork(f.db);
   policies = new PolicyService(f.db, uow);
   admission = new AdmissionService(
-    f.db, new SkillService(f.db, uow), new PeerService(f.db),
+    f.db, new SkillService(f.db, uow, new FilesystemObjectStore()), new PeerService(f.db),
     new PromptService(f.db, uow), policies,
   );
   versions = new AgentVersionService(f.db);

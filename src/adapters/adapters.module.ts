@@ -3,6 +3,7 @@ import { EchoAdapter } from './framework/echo/echo.adapter.js';
 import { PipelineAdapter } from './framework/pipeline/pipeline.adapter.js';
 import { DeepAgentsAdapter } from './framework/deep-agents/deep-agents.adapter.js';
 import { PostgresCheckpointSaver } from './framework/deep-agents/postgres.checkpoint-saver.js';
+import { ObjectStoreAgentStore } from './framework/deep-agents/object-store-agent-store.js';
 import { EchoProvider } from './providers/echo.provider.js';
 import {
   AnthropicProvider,
@@ -25,6 +26,7 @@ import { InMemoryCache } from './memory/in-memory.cache.js';
 import { PostgresRelationIndex } from './memory/postgres.relation-index.js';
 import { ExtractiveSummarizer } from './memory/extractive.summarizer.js';
 import { FilesystemObjectStore } from './storage/filesystem.object-store.js';
+import { MinioObjectStore } from './storage/minio.object-store.js';
 import { InMemoryResponseCache } from './cache/in-memory.response-cache.js';
 import { LangChainMcpClient } from './protocol/mcp/langchain.mcp-client.js';
 import { HttpEgressSandbox } from './sandbox/http-egress.sandbox.js';
@@ -60,6 +62,7 @@ import type { ModelProvider } from '../domain/ports/model-provider.port.js';
     PipelineAdapter,
     DeepAgentsAdapter,
     PostgresCheckpointSaver,
+    ObjectStoreAgentStore,
     EchoProvider,
     OpenAiCompatibleProvider,
     AnthropicProvider,
@@ -81,6 +84,7 @@ import type { ModelProvider } from '../domain/ports/model-provider.port.js';
     PostgresRelationIndex,
     ExtractiveSummarizer,
     FilesystemObjectStore,
+    MinioObjectStore,
     LangChainMcpClient,
     InMemoryResponseCache,
     {
@@ -118,8 +122,14 @@ import type { ModelProvider } from '../domain/ports/model-provider.port.js';
     { provide: MEMORY_CACHE, useExisting: InMemoryCache },
     { provide: RELATION_INDEX, useExisting: PostgresRelationIndex },
     { provide: SUMMARIZER, useExisting: ExtractiveSummarizer },
-    // §11.2's carve-out from the Postgres-centric bet. S3/GCS is one class on this port.
-    { provide: OBJECT_STORE, useExisting: FilesystemObjectStore },
+    // §11.2's carve-out from the Postgres-centric bet. MinIO/S3/GCS is one class on this
+    // port; MINIO_ENDPOINT opts in the same way MODEL_CREDENTIAL_EMBEDDING opts in Gemini.
+    {
+      provide: OBJECT_STORE,
+      inject: [FilesystemObjectStore, MinioObjectStore],
+      useFactory: (filesystem: FilesystemObjectStore, minio: MinioObjectStore) =>
+        MinioObjectStore.isConfigured() ? minio : filesystem,
+    },
     // §2.1: a protocol adapter, never the domain model. `tsconfig.core.json` compiles the
     // core with this excluded, which is what keeps that claim honest.
     // The registry decides the transport, never the caller (§18.5).

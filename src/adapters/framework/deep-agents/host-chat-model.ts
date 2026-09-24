@@ -4,6 +4,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/
 import type { BaseMessage } from '@langchain/core/messages';
 import type { ChatResult } from '@langchain/core/outputs';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
+import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import type { HostMessage, RunHost } from '../../../domain/ports/framework-adapter.port.js';
 
 /**
@@ -172,6 +173,32 @@ function toSchema(t: unknown): { name: string; description: string; parameters: 
   return {
     name: tool.name ?? 'unknown',
     description: tool.description ?? '',
-    parameters: (tool.schema as Record<string, unknown>) ?? { type: 'object' },
+    parameters: toJsonSchemaParameters(tool.schema),
   };
+}
+
+/**
+ * A `StructuredTool`'s `.schema` is a ZOD schema, not JSON Schema.
+ *
+ * This used to be a bare cast, which type-checked and then shipped Zod's internals to the
+ * provider. Google rejected the whole request:
+ *
+ *   [400] Invalid JSON payload received. Unknown name "_def" at
+ *   'tools[0].function_declarations[0].parameters': Cannot find field.
+ *
+ * It failed on DeepAgents' own built-in tools, so EVERY tool-capable run against a real provider
+ * was broken — the echo provider ignores `parameters`, which is why it went unnoticed.
+ *
+ * `toJsonSchema` handles Zod v3 and v4 and passes an object that is already JSON Schema straight
+ * through, so a tool registered either way converts correctly.
+ */
+function toJsonSchemaParameters(schema: unknown): Record<string, unknown> {
+  if (!schema || typeof schema !== 'object') return { type: 'object' };
+  try {
+    return toJsonSchema(schema as Parameters<typeof toJsonSchema>[0]) as Record<string, unknown>;
+  } catch {
+    // An unconvertible schema must not take the whole run down: a tool the model cannot be told
+    // about is better than a request the provider refuses outright.
+    return { type: 'object' };
+  }
 }

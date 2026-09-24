@@ -1804,14 +1804,16 @@ CREATE TABLE skill_versions (
     org_id        uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     namespace_id  uuid NOT NULL REFERENCES namespaces(id) ON DELETE CASCADE,
     version       integer NOT NULL,
-    instructions  text NOT NULL,
+    instructions  text,                      -- JSON-authored body; NULL when content_uri is set
+    content_uri   text,                      -- uploaded body's object-store URI; NULL when instructions is set
     when_to_use   text,                      -- cheap enough to hold 12 in context
     spec_hash     text NOT NULL,
     status        registry_status NOT NULL DEFAULT 'active',
     published_by  uuid REFERENCES principals(id),
     published_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (skill_id, version),
-    UNIQUE (id, namespace_id)
+    UNIQUE (id, namespace_id),
+    CONSTRAINT skill_versions_content_source_chk CHECK ((instructions IS NOT NULL) <> (content_uri IS NOT NULL))
 );
 CREATE INDEX skill_versions_lookup_idx ON skill_versions (skill_id, status, version DESC);
 

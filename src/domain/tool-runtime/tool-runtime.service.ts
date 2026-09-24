@@ -162,7 +162,7 @@ export class ToolRuntime {
     // idempotency key, the cache key and the recorded request all describe the call that
     // was actually made. Spread last: a pinned value is the author's decision, and a model
     // that guessed the same key must not be able to override it (§18.5).
-    args = { ...args, toolArgs: { ...args.toolArgs, ...binding.fixedArgs } };
+    args = { ...args, toolArgs: mergeFixedArgs(args.toolArgs, binding.fixedArgs) };
 
     // Gated before execution, not after: the Interaction IS the gate (§8.3, §14).
     if (has(binding.effects, 'human_approval_required') && !args.approved) {
@@ -374,3 +374,37 @@ export class ToolRuntime {
 
 const renderKey = (tpl: string, vars: Record<string, string>): string =>
   tpl.replace(/\$\{(\w+)\}/g, (_, k: string) => vars[k] ?? `\${${k}}`);
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * Applies bound arguments, merging INTO nested objects rather than replacing them.
+ *
+ * A shallow spread was wrong for any tool whose arguments are nested. ap-executor's `ai-agent-v2`
+ * is the case that exposed it: a Relay piece call puts the model's arguments under `input`, so a
+ * pinned field has to be `fixedArgs.input.<field>` — and a shallow merge replaced the model's ENTIRE
+ * `input` with just the pinned keys, silently dropping everything the model supplied. The practical
+ * effect was that `fixed` and `agent` fields could not coexist on one tool, which is exactly what
+ * pinning a spreadsheet id while the model fills the row requires.
+ *
+ * FIXED STILL WINS at every leaf — that is the security property (§18.5) and it is unchanged: a
+ * model that guesses a pinned key cannot override it, at any depth. Only the "replace vs merge"
+ * behaviour for object-valued keys changes. Arrays are replaced wholesale, not concatenated: a
+ * pinned list is a complete statement of what the value is, not a contribution to one.
+ */
+function mergeFixedArgs(
+  modelArgs: Record<string, unknown>,
+  fixedArgs: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...modelArgs };
+
+  for (const [key, pinned] of Object.entries(fixedArgs)) {
+    const existing = out[key];
+    out[key] =
+      isPlainObject(pinned) && isPlainObject(existing)
+        ? mergeFixedArgs(existing, pinned)
+        : pinned;
+  }
+  return out;
+}

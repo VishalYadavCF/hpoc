@@ -45,6 +45,32 @@ services:
       retries: 30
       start_period: 60s
 
+  minio:
+    # Docker Hub's minio/minio refuses anonymous pulls as of 2025; quay.io is MinIO's own
+    # registry and stays public.
+    image: quay.io/minio/minio:RELEASE.2025-04-08T15-41-24Z
+    container_name: hpoc-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000" # S3 API - MINIO_ENDPOINT / MINIO_PORT point here
+      - "9001:9001" # web console, http://localhost:9001
+    environment:
+      MINIO_ROOT_USER: hpoc
+      MINIO_ROOT_PASSWORD: hpoc12345
+    volumes:
+      - miniodata:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      # The image ships `mc` but no shell utilities beyond it (distroless-ish), so `mc
+      # ready local` is the supported check rather than curl against /minio/health/live.
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
 volumes:
   pgdata:
     name: hpoc-pgdata
+  miniodata:
+    name: hpoc-miniodata

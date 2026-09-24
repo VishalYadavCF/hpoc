@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DeepAgentsAdapter } from '../src/adapters/framework/deep-agents/deep-agents.adapter.js';
 import { PostgresCheckpointSaver } from '../src/adapters/framework/deep-agents/postgres.checkpoint-saver.js';
+import { ObjectStoreAgentStore } from '../src/adapters/framework/deep-agents/object-store-agent-store.js';
+import { FilesystemObjectStore } from '../src/adapters/storage/filesystem.object-store.js';
 import type {
   AgentSpecView,
   HostModelRequest,
@@ -32,6 +34,7 @@ let saver: PostgresCheckpointSaver;
 class ScriptedHost implements RunHost {
   readonly modelCalls: HostModelRequest[] = [];
   readonly toolCalls: { ref: string; args: Record<string, unknown> }[] = [];
+  readonly recordedArtifacts: Parameters<RunHost['recordArtifact']>[0][] = [];
   saved: unknown = null;
   private turn = 0;
 
@@ -62,6 +65,9 @@ class ScriptedHost implements RunHost {
   }
   saveState(state: unknown) {
     this.saved = state;
+  }
+  async recordArtifact(input: Parameters<RunHost['recordArtifact']>[0]) {
+    this.recordedArtifacts.push(input);
   }
   /**
    * A child host that records WHICH agent asked, so a test can prove an in-process
@@ -99,6 +105,9 @@ class FakeChild implements RunHost {
     return { kind: 'suspended', reason: 'peer_call', ref: alias };
   }
   saveState(): void {}
+  async recordArtifact(input: Parameters<RunHost['recordArtifact']>[0]) {
+    return this.parent.recordArtifact(input);
+  }
   forSubAgent(): RunHost | null {
     // One level. An in-process child that could spawn its own in-process children would
     // nest unboundedly inside a run with no delegation chain to check against (§4.6).
@@ -128,6 +137,10 @@ const session = (host: RunHost, over: Partial<RunSession> = {}): RunSession => {
   threads.push(runId);
   return {
     runId,
+    // Defaults to a value distinct from `runId`: a test that wants two runs to share a
+    // conversation must say so explicitly by passing the same `threadId` to both `session()`
+    // calls, rather than getting it for free from runId's own randomness.
+    threadId: `thread-${Math.random().toString(36).slice(2, 10)}`,
     spec: spec(),
     input: 'what is the balance?',
     state: null,
@@ -160,7 +173,11 @@ const asTenant = <T>(fn: () => Promise<T>): Promise<T> =>
 beforeAll(async () => {
   f = await fixture();
   saver = new PostgresCheckpointSaver(f.db);
-  adapter = new DeepAgentsAdapter(saver);
+  adapter = new DeepAgentsAdapter(
+    saver,
+    new ObjectStoreAgentStore(new FilesystemObjectStore()),
+    new FilesystemObjectStore(),
+  );
 });
 
 afterAll(async () => {
@@ -357,6 +374,7 @@ describe('skills and memory behind DeepAgents own middleware (Phase 4)', () => {
         version: 3,
         whenToUse: 'the customer asks for money back',
         instructions: 'STEP ONE: verify the order. STEP TWO: check the refund window.',
+        contentUri: null,
       },
     ],
   });
@@ -383,6 +401,38 @@ describe('skills and memory behind DeepAgents own middleware (Phase 4)', () => {
     expect(advertised).toContain('read_file');
   });
 
+  it('streams an UPLOADED skill body from object storage when the model reads it', async () => {
+    const store = new FilesystemObjectStore();
+    // skill-uploads/, not skills/ -- matching SkillService.publish's real key so this
+    // test exercises the actual prefix an upload lands under, not a colliding one.
+    const uploaded = await store.put(
+      `${f.orgId}/${f.namespaceId}/skill-uploads/${Math.random().toString(36).slice(2)}`,
+      Buffer.from('---\nname: escalation\ndescription: when a VIP complains\n---\n\nESCALATE IMMEDIATELY.'),
+      'text/markdown',
+    );
+    const uploadedSkill = spec({
+      skills: [
+        {
+          name: 'escalation procedure',
+          version: 1,
+          whenToUse: 'when a VIP complains',
+          instructions: null,
+          contentUri: uploaded.uri,
+        },
+      ],
+    });
+
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'read_file', args: { file_path: '/skills/escalation-procedure/SKILL.md' } }] },
+      { text: 'read it' },
+    ]);
+    const out = await asTenant(() => adapter.run(session(host, { spec: uploadedSkill })));
+
+    expect(out.type).toBe('complete');
+    const toolTurn = host.modelCalls[1]!.messages.find((m) => m.role === 'tool');
+    expect(toolTurn?.content).toContain('ESCALATE IMMEDIATELY');
+  });
+
   it('puts recalled memory in the prompt WHOLE, with provenance per record', async () => {
     const host = new ScriptedHost([{ text: 'ok' }]);
     await asTenant(() =>
@@ -406,25 +456,34 @@ describe('skills and memory behind DeepAgents own middleware (Phase 4)', () => {
   });
 
   it('refuses to let a run edit a skill it was given', async () => {
-    const backendSpec = withSkill;
-    const host = new ScriptedHost([{ text: 'ok' }]);
-    await asTenant(() => adapter.run(session(host, { spec: backendSpec })));
-
-    // Constructed the same way the adapter does, since the refusal is the backend's.
-    const { PlatformBackend } = await import(
-      '../src/adapters/framework/deep-agents/platform.backend.js'
-    );
-    const backend = new PlatformBackend(backendSpec);
     const path = '/skills/refund-procedure/SKILL.md';
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'edit_file', args: { file_path: path, old_string: 'STEP ONE', new_string: 'SKIP' } }] },
+      { text: 'could not edit' },
+    ]);
 
-    expect(backend.read(path).content).toContain('STEP ONE');
     // A skill is a governed, versioned artifact (§17.2). If a run could rewrite one, the
-    // next run's behaviour would depend on the last run's improvisation and no eval could
-    // attribute a regression to anything.
-    expect(backend.write(path, 'do whatever').error).toMatch(/cannot be written/);
-    expect(backend.edit(path, 'STEP ONE', 'SKIP').error).toMatch(/cannot be edited/);
-    // Scratch space is still writable, or the filesystem tools would be useless.
-    expect(backend.write('/workspace/notes.md', 'draft').error).toBeUndefined();
+    // next run's behaviour would depend on the last run's improvisation -- and because
+    // skill content is cached across runs in this namespace (seeded once, read many
+    // times), a successful edit here would corrupt what every OTHER run reads back too.
+    const out = await asTenant(() => adapter.run(session(host, { spec: withSkill })));
+
+    expect(out.type).toBe('complete');
+    const toolTurn = host.modelCalls[1]!.messages.find((m) => m.role === 'tool');
+    expect(toolTurn?.content).toMatch(/read-only|governed/i);
+  });
+
+  it('still lets a run write to /workspace in the same drive', async () => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'write_file', args: { file_path: '/workspace/notes.md', content: 'draft' } }] },
+      { text: 'saved' },
+    ]);
+
+    const out = await asTenant(() => adapter.run(session(host, { spec: withSkill })));
+
+    expect(out.type).toBe('complete');
+    const toolTurn = host.modelCalls[1]!.messages.find((m) => m.role === 'tool');
+    expect(toolTurn?.content ?? '').not.toMatch(/error|read-only/i);
   });
 });
 
@@ -750,6 +809,7 @@ describe("mode: 'inline' — a registered sub-agent inside its caller's run (§1
           version: 2,
           whenToUse: 'always, before answering',
           instructions: 'THE FIVE INTENTS ARE: refund, dispute, status, update, other.',
+          contentUri: null,
         },
       ],
     },
@@ -837,5 +897,84 @@ describe("mode: 'inline' — a registered sub-agent inside its caller's run (§1
     const advertised = (host.modelCalls[0]!.tools ?? []).map((t) => t.name);
     expect(advertised).toContain('delegate_to_billing');
     expect(advertised).not.toContain('delegate_to_classifier');
+  });
+});
+
+/**
+ * §11.2. Before this, `/workspace` lived in a plain in-memory object per `PlatformBackend`'s
+ * own "Honest limit" note: gone the moment a drive ended, let alone a SEPARATE later run.
+ * These prove the actual fix -- a file survives past the run that wrote it, scoped to the
+ * conversation thread rather than either the run or the whole tenant.
+ */
+describe('/workspace persists across separate runs of the same thread (§11.2)', () => {
+  it('a file written in one run is readable in a later run sharing the same thread', async () => {
+    const threadId = `thread-workspace-${Math.random().toString(36).slice(2, 8)}`;
+
+    const writerHost = new ScriptedHost([
+      {
+        text: '',
+        toolCalls: [
+          { name: 'write_file', args: { file_path: '/workspace/notes.md', content: 'left for the next run' } },
+        ],
+      },
+      { text: 'saved' },
+    ]);
+    const written = await asTenant(() => adapter.run(session(writerHost, { threadId })));
+    expect(written.type).toBe('complete');
+
+    const readerHost = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'read_file', args: { file_path: '/workspace/notes.md' } }] },
+      { text: 'read it back' },
+    ]);
+    // A fresh runId, same threadId -- a genuinely separate drive, not a resume of the first.
+    const read = await asTenant(() => adapter.run(session(readerHost, { threadId })));
+    expect(read.type).toBe('complete');
+
+    const toolTurn = readerHost.modelCalls[1]!.messages.find((m) => m.role === 'tool');
+    expect(toolTurn?.content).toContain('left for the next run');
+  });
+
+  it('does not leak a workspace file into a different thread', async () => {
+    const writerHost = new ScriptedHost([
+      {
+        text: '',
+        toolCalls: [{ name: 'write_file', args: { file_path: '/workspace/secret.md', content: 'thread A only' } }],
+      },
+      { text: 'saved' },
+    ]);
+    await asTenant(() => adapter.run(session(writerHost, { threadId: 'thread-a-for-isolation-test' })));
+
+    const otherHost = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'read_file', args: { file_path: '/workspace/secret.md' } }] },
+      { text: 'not found' },
+    ]);
+    await asTenant(() => adapter.run(session(otherHost, { threadId: 'thread-b-for-isolation-test' })));
+
+    const toolTurn = otherHost.modelCalls[1]!.messages.find((m) => m.role === 'tool');
+    expect(toolTurn?.content).not.toContain('thread A only');
+  });
+
+  it('also records the write as a discoverable artifact (§11.2 both)', async () => {
+    const host = new ScriptedHost([
+      {
+        text: '',
+        toolCalls: [
+          { name: 'write_file', args: { file_path: '/workspace/report.md', content: '# a report' } },
+        ],
+      },
+      { text: 'saved' },
+    ]);
+
+    // LangGraph's own namespace-label validation rejects a literal '.', which is why this
+    // (like every other threadId in this suite) is built from toString(36) rather than a
+    // raw Math.random() -- a real threadId is a uuid and never hits this.
+    const threadId = `thread-artifact-${Math.random().toString(36).slice(2, 10)}`;
+    await asTenant(() => adapter.run(session(host, { threadId })));
+
+    expect(host.recordedArtifacts).toHaveLength(1);
+    expect(host.recordedArtifacts[0]!.body.toString('utf8')).toBe('# a report');
+    // Relative to the /workspace mount, not the absolute path the model used:
+    // CompositeBackend strips its own route prefix before the routed store ever sees a key.
+    expect(host.recordedArtifacts[0]!.metadata).toMatchObject({ workspacePath: '/report.md' });
   });
 });

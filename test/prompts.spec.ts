@@ -4,6 +4,7 @@ import { PolicyService } from '../src/domain/policy/policy.service.js';
 import { PromptService } from '../src/domain/prompt/prompt.service.js';
 import { AdmissionService } from '../src/domain/admission/admission.service.js';
 import { SkillService } from '../src/domain/skills/skill.service.js';
+import { FilesystemObjectStore } from '../src/adapters/storage/filesystem.object-store.js';
 import { PeerService } from '../src/domain/peer/peer.service.js';
 import { AgentVersionService } from '../src/domain/registry/agent-version.service.js';
 import { AdmissionRejected } from '../src/domain/errors/platform.errors.js';
@@ -40,7 +41,7 @@ beforeAll(async () => {
   const uow = new UnitOfWork(f.db);
   prompts = new PromptService(f.db, uow);
   admission = new AdmissionService(
-    f.db, new SkillService(f.db, uow), new PeerService(f.db), prompts,
+    f.db, new SkillService(f.db, uow, new FilesystemObjectStore()), new PeerService(f.db), prompts,
     new PolicyService(f.db, uow),
   );
   versions = new AgentVersionService(f.db);

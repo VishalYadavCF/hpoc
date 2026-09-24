@@ -326,6 +326,7 @@ export class RunLoop {
 
     const outcome = await adapter.run({
       runId: run.id,
+      threadId: run.thread_id,
       spec: {
         modelRef: version.modelId,
         systemPrompt: version.systemPrompt,
@@ -341,6 +342,7 @@ export class RunLoop {
           version: sk.version,
           whenToUse: sk.whenToUse,
           instructions: sk.instructions,
+          contentUri: sk.contentUri,
         })),
         knowledge,
         subAgents: subAgents.map((a) => {
@@ -366,6 +368,7 @@ export class RunLoop {
                     version: sk.version,
                     whenToUse: sk.whenToUse,
                     instructions: sk.instructions,
+                    contentUri: sk.contentUri,
                   })),
                 }
               : null,
@@ -532,6 +535,18 @@ export class RunLoop {
     ): RunHost => ({
       saveState: (state) => {
         host.frameworkState = state;
+      },
+
+      // Deliberately outside `host.step`: no budget check, no lease fencing, no `steps`
+      // row -- there is no step here, the same as `saveState`. `ArtifactService.write`
+      // pulls org/namespace/tenant from the ambient context the run loop already pinned
+      // for this whole drive, so nothing tenant-scoped needs threading through here.
+      recordArtifact: async (input) => {
+        try {
+          await this.artifacts.write({ ...input, runId: run.id, threadId: run.thread_id });
+        } catch (e) {
+          this.log.warn(`recordArtifact failed for run ${run.id}: ${(e as Error).message}`);
+        }
       },
 
       callModel: (request: HostModelRequest) =>

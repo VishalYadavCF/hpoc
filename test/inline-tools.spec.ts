@@ -3,6 +3,7 @@ import { AdmissionService } from '../src/domain/admission/admission.service.js';
 import { PolicyService } from '../src/domain/policy/policy.service.js';
 import { PromptService } from '../src/domain/prompt/prompt.service.js';
 import { SkillService } from '../src/domain/skills/skill.service.js';
+import { FilesystemObjectStore } from '../src/adapters/storage/filesystem.object-store.js';
 import { PeerService } from '../src/domain/peer/peer.service.js';
 import { UnitOfWork } from '../src/platform/persistence/unit-of-work.js';
 import { AdmissionRejected } from '../src/domain/errors/platform.errors.js';
@@ -63,7 +64,7 @@ beforeAll(async () => {
   f = await fixture();
   admission = new AdmissionService(
     f.db,
-    new SkillService(f.db, new UnitOfWork(f.db)),
+    new SkillService(f.db, new UnitOfWork(f.db), new FilesystemObjectStore()),
     new PeerService(f.db),
     new PromptService(f.db, new UnitOfWork(f.db)),
     new PolicyService(f.db, new UnitOfWork(f.db)),
