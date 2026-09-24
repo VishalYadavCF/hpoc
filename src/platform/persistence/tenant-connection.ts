@@ -99,6 +99,41 @@ export function runPinned<T>(client: pg.PoolClient, fn: () => T): T {
 }
 
 /**
+ * Runs `fn` on its OWN physical connection, even when the caller is already pinned.
+ *
+ * The deliberate opposite of `withTenantConnection`, which nests. Nesting is right for
+ * everything that wants to participate in the caller's session; this exists for the one thing
+ * that must NOT -- a write whose whole purpose is to survive the failure of the work happening
+ * on the caller's connection.
+ *
+ * `ToolRuntime` is that caller. A run pins one connection for its entire drive (RunLoop.execute),
+ * so the step's transaction and every `this.db` query share one physical session: a statement
+ * issued through the pool while that transaction is open joins it, and is rolled back with it.
+ * A record written to prove a side effect was ATTEMPTED cannot live on the transaction whose
+ * rollback is the thing it has to outlive.
+ *
+ * The pin is exited only for the checkout itself, so the proxy in `tenantScopedPool` reaches the
+ * real pool; `fn` then runs pinned to the NEW connection, which carries its own `app.org_id` and
+ * is reset and released on the way out.
+ *
+ * COSTS A SECOND CONNECTION for as long as `fn` runs, while the caller still holds its own. Keep
+ * `fn` to a statement or two, and keep `DB_POOL_MAX` comfortably above `WORKER_CONCURRENCY`:
+ * a pool sized to exactly the number of concurrent drives would have nothing left to hand out.
+ */
+export async function withSeparateConnection<T>(
+  pool: pg.Pool,
+  scope: TenantScope,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const { client, release } = await pinStorage.exit(() => acquireTenantConnection(pool, scope));
+  try {
+    return await runPinned(client, fn);
+  } finally {
+    await release();
+  }
+}
+
+/**
  * Convenience for a scope that IS one bounded `await` -- driving one run to completion,
  * firing one trigger, handling one background sweep. Nests cleanly: a call already inside
  * a pinned scope reuses it rather than acquiring a second connection, so pinned code

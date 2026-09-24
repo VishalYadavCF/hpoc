@@ -498,13 +498,24 @@ export class RunLoop {
         fn: (tx: Tx, stepSeq: number) => Promise<{ result: T; costMicros: number; seq: number | null }>,
       ): Promise<T> => {
         await host.guard(acting);
-        const stepSeq = host.stepSeq + 1;
+        // RESERVED before the await, not assigned after it.
+        //
+        // `const n = host.stepSeq + 1; await …; host.stepSeq = n` is a read-modify-write spanning
+        // an await, and the framework runs a turn's tool calls CONCURRENTLY — a model answering
+        // "do this for each of the three" emits three calls at once. All three read the same
+        // value, all three inserted the same seq, and the run died on
+        // `steps_run_id_seq_key`, after the side effects of the first had already happened.
+        //
+        // `++` is atomic here because nothing awaits between the read and the write, so
+        // concurrent callers each get a distinct number. A step that then FAILS still consumes
+        // its number, leaving a gap — which is correct: the attempt existed, and seq only has to
+        // be unique and increasing, not contiguous.
+        const stepSeq = ++host.stepSeq;
         const out = await this.uow.run(async (tx) => {
           // Fencing, in the same transaction as every durable write that follows.
           await this.queue.assertHeld(tx, lease);
           return fn(tx, stepSeq);
         });
-        host.stepSeq = stepSeq;
         host.costMicros += out.costMicros;
         // Recorded after the step's own transaction committed: a budget is a governance
         // ceiling (§5.2), not the ledger of record for the spend itself -- `runs.cost_micros`
@@ -1603,6 +1614,10 @@ export class RunLoop {
         })),
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
+        // Opaque provider state, handed to the framework so it rides the graph's own message
+        // history and comes back on the next turn. Not persisted separately: the checkpointer
+        // already serialises the framework's messages, which is where it belongs.
+        ...(result.providerMetadata ? { providerMetadata: result.providerMetadata } : {}),
       },
       costMicros: result.costMicros,
       seq,

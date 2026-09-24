@@ -492,6 +492,12 @@ CREATE TABLE tools (
     -- GET and DELETE, body otherwise.
     arg_placement     text CHECK (arg_placement IS NULL
                                   OR arg_placement IN ('query','body','none')),
+    -- Nests the MODEL's arguments under this key in the body, leaving bound arguments free to
+    -- address the top level. NULL keeps them flat. Exists because a request body is not always
+    -- the argument list: ap-executor's execute route wants
+    -- `{ action, merchantId, auth, input: {...} }`, and asking the model to produce that nesting
+    -- itself does not survive contact with a real one.
+    arg_wrapper_key   text CHECK (arg_wrapper_key IS NULL OR arg_wrapper_key <> ''),
     -- Accept headers and API version pins. NEVER credentials: those are minted per call
     -- by the broker (§16.3) and are not registry data.
     static_headers    jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -527,6 +533,11 @@ CREATE TABLE tools (
     -- A body on GET or DELETE is not portable and several servers reject it outright.
     CONSTRAINT tool_no_body_on_get_ck
         CHECK (arg_placement <> 'body' OR http_method NOT IN ('GET','DELETE')),
+    -- Nesting is only meaningful when the arguments are in the body at all; in `query` or
+    -- `none` there is no object to nest into, and ignoring it there would make a
+    -- misconfiguration invisible.
+    CONSTRAINT tool_arg_wrapper_needs_body
+        CHECK (arg_wrapper_key IS NULL OR arg_placement IS NULL OR arg_placement = 'body'),
     -- A runtime with no body, or a body with no runtime, is a tool that cannot run.
     CONSTRAINT tool_code_pairing_ck
         CHECK ((code_runtime IS NULL) = (code_source IS NULL)),
@@ -1000,7 +1011,12 @@ CREATE INDEX steps_agent_version_idx ON steps (agent_version_id) WHERE agent_ver
 -- contract snapshotted as it was at invocation time.
 CREATE TABLE tool_invocations (
     id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    step_id                uuid NOT NULL REFERENCES steps(id) ON DELETE CASCADE,
+    -- The step's id, but NOT a foreign key (0031). A non-idempotent invocation is committed
+    -- before its side effect, on its own connection, so the guard in §4.5 has something to
+    -- find after a crash -- and at that moment the step row is still uncommitted in the
+    -- transaction awaiting the tool call. A join to `steps` that returns nothing is the honest
+    -- answer: it says that step never committed.
+    step_id                uuid NOT NULL,
     run_id                 uuid NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     thread_id              uuid NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
     org_id                 uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -1048,6 +1064,9 @@ CREATE UNIQUE INDEX tool_invocations_idempotency_uq
     WHERE idempotency_key IS NOT NULL;
 CREATE INDEX tool_invocations_run_idx  ON tool_invocations (run_id, created_at);
 CREATE INDEX tool_invocations_tool_idx ON tool_invocations (tool_id, created_at DESC);
+-- §4.5's guard runs once per resumed run, before the framework is driven. Partial, because
+-- `running` is a vanishing fraction of the table and the only status it ever asks about.
+CREATE INDEX tool_invocations_running_idx ON tool_invocations (run_id) WHERE status = 'running';
 
 -- §4.2 resumable state snapshot at a step boundary. Forking and time-travel
 -- both hang off parent_checkpoint_id.

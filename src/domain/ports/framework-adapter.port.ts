@@ -207,6 +207,8 @@ export interface HostMessage {
   toolCalls?: { id: string; name: string; args: Record<string, unknown> }[];
   /** Present on a tool turn, matching the assistant turn's call id. */
   toolCallId?: string;
+  /** Opaque provider state carried back from when this turn was produced. */
+  providerMetadata?: Record<string, unknown>;
 }
 
 export interface HostModelRequest {
@@ -240,6 +242,8 @@ export interface HostModelResult {
   toolCalls: { id: string; name: string; args: Record<string, unknown> }[];
   inputTokens: number;
   outputTokens: number;
+  /** Opaque provider state the framework must keep on this turn and replay on the next. */
+  providerMetadata?: Record<string, unknown>;
 }
 
 /**

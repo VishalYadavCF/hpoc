@@ -1,8 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { sql } from 'kysely';
-import { DB } from '../../platform/persistence/tokens.js';
+import type { InsertObject } from 'kysely';
+import type pg from 'pg';
+import { DB, POOL } from '../../platform/persistence/tokens.js';
 import type { Db, Tx } from '../../platform/persistence/database.js';
-import type { EffectClass } from '../../platform/persistence/schema.types.js';
+import { withSeparateConnection } from '../../platform/persistence/tenant-connection.js';
+import type { Database, EffectClass } from '../../platform/persistence/schema.types.js';
 import { SANDBOX, type Sandbox } from '../ports/sandbox.port.js';
 import { CredentialBroker } from '../identity/credential-broker.service.js';
 import { MCP_CLIENT, type McpClient } from '../ports/mcp-client.port.js';
@@ -38,6 +41,8 @@ export interface ToolBinding {
   httpMethod: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   pathTemplate: string | null;
   argPlacement: 'query' | 'body' | 'none' | null;
+  /** Nests the MODEL's arguments under this key before bound arguments are applied. */
+  argWrapperKey: string | null;
   staticHeaders: Record<string, string>;
   /** §8.1 `origin = 'function'`: the body the sandbox runs. Null for outbound-call tools. */
   codeRuntime: 'node' | 'python' | null;
@@ -50,6 +55,20 @@ export type ToolOutcome =
   | { kind: 'needs_approval'; invocationId: null; toolRef: string };
 
 const has = (effects: EffectClass[], e: EffectClass): boolean => effects.includes(e);
+
+/**
+ * Whether a crash mid-call leaves the outside world in a state we cannot determine.
+ *
+ * ONE predicate decides two things, and that is the point: whether the `running` row is
+ * committed before the call, and whether a `running` row found on resume stops the run. They
+ * were allowed to differ once -- the guard looked for evidence the write path never durably
+ * produced -- and the result was silent duplicate side effects on every crash.
+ *
+ * `read_only` has nothing to be indeterminate about. `idempotent` declares that calling twice
+ * is calling once, and §4.5 already reuses a prior attempt's result by key. What is left is the
+ * call that changed something and cannot prove it.
+ */
+const isIndeterminateOnCrash = (effects: EffectClass[]): boolean => has(effects, 'non_idempotent');
 
 /**
  * Executes one tool call, with the strategy selected by its declared effect contract.
@@ -65,6 +84,9 @@ export class ToolRuntime {
 
   constructor(
     @Inject(DB) private readonly db: Db,
+    // The raw pool, for the ONE write that must not ride the caller's connection --
+    // see `recordAttempt` below.
+    @Inject(POOL) private readonly pool: pg.Pool,
     @Inject(SANDBOX) private readonly sandbox: Sandbox,
     @Inject(MCP_CLIENT) private readonly mcp: McpClient,
     private readonly mcpRegistry: McpRegistryService,
@@ -79,7 +101,8 @@ export class ToolRuntime {
         'avt.tool_id', 'avt.idempotency_key_tpl', 'avt.cache_ttl_seconds', 'avt.fixed_args',
         't.ref', 't.origin', 't.version', 't.endpoint_url', 't.sandbox_profile',
         't.timeout_ms', 't.definition_hash', 't.description', 't.input_schema',
-        't.http_method', 't.path_template', 't.arg_placement', 't.static_headers',
+        't.http_method', 't.path_template', 't.arg_placement', 't.arg_wrapper_key',
+        't.static_headers',
         't.code_runtime', 't.code_source',
         't.mcp_server_id', 't.mcp_tool_name',
         // See admission.service.ts: a custom enum array needs the cast to become an array.
@@ -100,6 +123,7 @@ export class ToolRuntime {
       httpMethod: r.http_method,
       pathTemplate: r.path_template,
       argPlacement: r.arg_placement,
+      argWrapperKey: r.arg_wrapper_key,
       staticHeaders: (r.static_headers ?? {}) as Record<string, string>,
       codeRuntime: r.code_runtime,
       codeSource: r.code_source,
@@ -120,6 +144,11 @@ export class ToolRuntime {
    * A resumed run that finds one of its own non-idempotent invocations still `running`
    * does not know whether the side effect happened. It may not retry, and it may not
    * assume success. It says so.
+   *
+   * This only works because `recordAttempt` commits that row on its own connection. When the
+   * row was written on the step's transaction these lines were unreachable by construction,
+   * and a crash mid-effect resumed straight into a duplicate. If you are tempted to move the
+   * insert back onto `tx`, read `recordAttempt` first.
    */
   async assertNoIndeterminateInvocations(runId: string): Promise<void> {
     const stuck = await this.db
@@ -162,7 +191,14 @@ export class ToolRuntime {
     // idempotency key, the cache key and the recorded request all describe the call that
     // was actually made. Spread last: a pinned value is the author's decision, and a model
     // that guessed the same key must not be able to override it (§18.5).
-    args = { ...args, toolArgs: mergeFixedArgs(args.toolArgs, binding.fixedArgs) };
+    // Nest the model's arguments FIRST, so bound arguments can address both the wrapper's inside
+    // (`fixedArgs.input.spreadsheetId`) and the top level (`fixedArgs.action`) in one object.
+    // Doing it here rather than showing the model a wrapped schema is the point: a shape the
+    // platform guarantees beats one the model is asked to reproduce and demonstrably does not.
+    const modelArgs = binding.argWrapperKey
+      ? { [binding.argWrapperKey]: args.toolArgs }
+      : args.toolArgs;
+    args = { ...args, toolArgs: mergeFixedArgs(modelArgs, binding.fixedArgs) };
 
     // Gated before execution, not after: the Interaction IS the gate (§8.3, §14).
     if (has(binding.effects, 'human_approval_required') && !args.approved) {
@@ -203,31 +239,26 @@ export class ToolRuntime {
       else if (hit) this.cache.delete(cacheKey);
     }
 
-    await tx
-      .insertInto('tool_invocations')
-      .values({
-        id: invocationId,
-        step_id: args.stepId,
-        run_id: args.runId,
-        thread_id: args.threadId,
-        org_id: args.orgId,
-        namespace_id: args.namespaceId,
-        tenant_ref: args.tenantRef,
-        tool_id: binding.toolId,
-        origin: binding.origin,
-        effects: binding.effects,
-        definition_hash: binding.definitionHash,
-        tool_version: binding.version,
-        idempotency_key: idempotencyKey,
-        authorized_principal_id: args.onBehalfOf,
-        sandbox_profile: binding.sandboxProfile,
-        request: JSON.stringify(args.toolArgs),
-        // Written as `running` BEFORE the call, deliberately. That row is what a resumed
-        // run reads to discover a non-idempotent invocation of unknown outcome.
-        status: 'running',
-        started_at: sql`now()`,
-      })
-      .execute();
+    await this.recordAttempt(tx, binding.effects, args.orgId, {
+      id: invocationId,
+      step_id: args.stepId,
+      run_id: args.runId,
+      thread_id: args.threadId,
+      org_id: args.orgId,
+      namespace_id: args.namespaceId,
+      tenant_ref: args.tenantRef,
+      tool_id: binding.toolId,
+      origin: binding.origin,
+      effects: binding.effects,
+      definition_hash: binding.definitionHash,
+      tool_version: binding.version,
+      idempotency_key: idempotencyKey,
+      authorized_principal_id: args.onBehalfOf,
+      sandbox_profile: binding.sandboxProfile,
+      request: JSON.stringify(args.toolArgs),
+      status: 'running',
+      started_at: sql`now()`,
+    });
 
     if (cached) {
       await this.settle(tx, invocationId, 'succeeded', cached.value, null);
@@ -342,6 +373,49 @@ export class ToolRuntime {
         error: { message: (e as Error).message, retryable: false },
       };
     }
+  }
+
+  /**
+   * Writes the `running` row, on a connection chosen by what the call can do to the world.
+   *
+   * ## Why this is not one `tx.insertInto`
+   *
+   * It used to be, and the comment above it claimed the row "is what a resumed run reads to
+   * discover a non-idempotent invocation of unknown outcome". It was not. The insert, the call
+   * and the settle all shared the step's transaction, so `running` was never visible outside it
+   * and a crash rolled the row back along with everything else. The guard that reads those rows
+   * had nothing to find, on every crash, by construction. The state it exists to detect was
+   * erased by the exact event that creates it.
+   *
+   * Measured, driving nine Google Sheets writes through ap-executor's `ai-agent-v2` and killing
+   * the worker mid-write: eleven writes, two duplicate rows in the sheet, `run.completed`, and
+   * the agent reporting "I wrote 9 rows". Nothing anywhere said otherwise.
+   *
+   * So for a call that can change the outside world, the row is committed FIRST, on its own
+   * connection -- `withSeparateConnection`, because a run pins one connection for its whole
+   * drive and a plain `this.db` write would join the very transaction whose rollback it has to
+   * survive. The settle stays on `tx`, deliberately: if the step's transaction rolls back after
+   * a successful call, the row is left `running`, the next resume refuses, and we dead-letter
+   * rather than replay a step whose effect already landed. Refusing is the conservative answer
+   * and §4.5 asks for exactly that.
+   *
+   * Everything else -- reads, and writes whose idempotency key makes a second call a no-op --
+   * stays on `tx`, where a rollback SHOULD discard the record along with the step. The extra
+   * connection buys nothing there, and `bindingsFor`-heavy runs would pay it per call.
+   */
+  private async recordAttempt(
+    tx: Tx,
+    effects: EffectClass[],
+    orgId: string,
+    row: InsertObject<Database, 'tool_invocations'>,
+  ): Promise<void> {
+    if (!isIndeterminateOnCrash(effects)) {
+      await tx.insertInto('tool_invocations').values(row).execute();
+      return;
+    }
+    await withSeparateConnection(this.pool, { orgId }, () =>
+      this.db.insertInto('tool_invocations').values(row).execute(),
+    );
   }
 
   private async settle(

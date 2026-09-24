@@ -507,6 +507,10 @@ export class AdmissionService {
       method,
       path,
       placement: def.argPlacement,
+      // In the hash because it changes the REQUEST, not just the presentation: the same fields
+      // nested under a key and sent flat are two different calls. Omitting it would collapse them
+      // onto one row and serve whichever was admitted first.
+      wrapper: def.argWrapperKey,
     });
 
     const existing = await this.db
@@ -541,6 +545,7 @@ export class AdmissionService {
             // From the spec: the shape of the call, and nothing else.
             http_method: method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
             path_template: path,
+            arg_wrapper_key: def.argWrapperKey,
             arg_placement: def.argPlacement,
             template_id: template.id,
             spec_hash: specHash,

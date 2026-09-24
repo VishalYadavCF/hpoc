@@ -49,6 +49,15 @@ export const inlineToolSchema = z.object({
   /** Where arguments the path did not consume go. NULL means by method. */
   argPlacement: z.enum(['query', 'body', 'none']).nullable().default(null),
   /**
+   * Nests the MODEL's arguments under this key in the body, leaving `fixedArgs` free to address
+   * the top level — for an API whose body is not simply the argument list.
+   *
+   * The platform does the nesting, deliberately, rather than the model being shown a wrapped
+   * schema and asked to reproduce it: measured against gemini-2.5-flash, it emitted the fields
+   * flat every time and the request was rejected for missing them.
+   */
+  argWrapperKey: z.string().min(1).max(64).nullable().default(null),
+  /**
    * Arguments bound by the platform, which the model never sees (ai-agent's `fixed` field
    * mode).
    *

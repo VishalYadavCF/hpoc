@@ -114,7 +114,7 @@ export class ModelGateway {
 
     try {
       const response = await provider.complete(
-        { ...args.request, providerModelId: model.provider_model_id },
+        this.providerRequest(args.request, model),
         credentials,
       );
       // Never cache a response carrying tool calls: the arguments are situational, and
@@ -136,13 +136,36 @@ export class ModelGateway {
       if (!fallbackProvider) throw e;
 
       const response = await fallbackProvider.complete(
-        { ...args.request, providerModelId: fallback.provider_model_id },
+        this.providerRequest(args.request, fallback),
         // The fallback is a different provider with a different secret. Reusing the
         // first model's credentials would 401 and look like the fallback itself failing.
         await this.credentialsFor(args, fallback),
       );
       return this.toResult(fallback, response, model.id);
     }
+  }
+
+
+  /**
+   * The request as the provider should see it, with the registry's own ceiling applied.
+   *
+   * `models.max_output_tokens` was stored and then never read: nothing set
+   * `ModelRequest.maxOutputTokens`, so every call ran on the vendor's default. That is invisible
+   * on a normal model and fatal on a REASONING one — gemini-2.5-flash spent the whole default
+   * budget on thoughts and returned an empty answer with no tool calls, as a `completed`, billed
+   * run. An explicit ceiling from the registry is what the column was for.
+   *
+   * A caller that names its own limit still wins: this is a default, not a cap.
+   */
+  private providerRequest(
+    request: Omit<ModelRequest, 'providerModelId'>,
+    model: { provider_model_id: string; max_output_tokens: number | null },
+  ): ModelRequest {
+    return {
+      ...request,
+      providerModelId: model.provider_model_id,
+      maxOutputTokens: request.maxOutputTokens ?? model.max_output_tokens,
+    };
   }
 
   private async credentialsFor(
@@ -252,7 +275,7 @@ export class ModelGateway {
     }
 
     const credentials = await this.credentialsFor(args, model);
-    const request = { ...args.request, providerModelId: model.provider_model_id };
+    const request = this.providerRequest(args.request, model);
 
     let settle!: (r: GatewayResult & { partial: boolean }) => void;
     let fail!: (e: unknown) => void;
@@ -301,7 +324,7 @@ export class ModelGateway {
           fail(e);
           throw e;
         }
-        const fallbackRequest = { ...args.request, providerModelId: fallback.provider_model_id };
+        const fallbackRequest = self.providerRequest(args.request, fallback);
         let fallbackText = '';
         for await (const chunk of self.iterate(
           fallbackProvider,

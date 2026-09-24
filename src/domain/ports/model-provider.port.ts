@@ -13,6 +13,21 @@ export interface ToolCall {
   id?: string;
 }
 
+/**
+ * Opaque, provider-owned state that must survive a round trip.
+ *
+ * The platform NEVER interprets this — it is a sealed envelope handed back to the same provider
+ * on the next turn. Gemini's reasoning models are why it exists: each `functionCall` comes with a
+ * `thoughtSignature`, and replaying the transcript without it is rejected outright
+ * ("Function call is missing a thought_signature… required for tools to work correctly"). On the
+ * older models it is not even an error, just silently degraded answers — which presented as the
+ * agent going quiet and calling no tools at all.
+ *
+ * Deliberately untyped and provider-neutral rather than a `thoughtSignature` field: the next
+ * vendor's opaque state will not be Gemini's, and the port should not learn one vendor's vocabulary.
+ */
+export type ProviderMetadata = Record<string, unknown>;
+
 /** One turn of a transcript, in the shape every vendor's chat API agrees on. */
 export interface ModelMessage {
   role: 'user' | 'assistant' | 'tool';
@@ -21,6 +36,8 @@ export interface ModelMessage {
   toolCalls?: ToolCall[];
   /** Present on a tool turn, matching the assistant turn's call id. */
   toolCallId?: string;
+  /** Opaque provider state captured when this turn was produced. Replayed verbatim. */
+  providerMetadata?: ProviderMetadata;
 }
 
 export interface ModelRequest {
@@ -60,6 +77,8 @@ export interface ModelResponse {
   outputTokens: number;
   /** Populated when the model asked for a tool rather than answering. */
   toolCalls?: ToolCall[];
+  /** Opaque provider state to replay on the next turn. See `ProviderMetadata`. */
+  providerMetadata?: ProviderMetadata;
 }
 
 /**

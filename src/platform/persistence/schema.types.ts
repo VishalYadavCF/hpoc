@@ -98,6 +98,8 @@ export interface ToolsTable {
   status: Generated<string>; created_at: TsD;
   http_method: Generated<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'>;
   path_template: string | null;
+  /** Nests the model's arguments under this key in the body; NULL leaves them flat. */
+  arg_wrapper_key: string | null;
   arg_placement: 'query' | 'body' | 'none' | null;
   static_headers: JsonD;
   code_runtime: 'node' | 'python' | null;

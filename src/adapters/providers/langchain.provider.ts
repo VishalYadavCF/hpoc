@@ -266,6 +266,10 @@ function messagesFor(request: ModelRequest): BaseMessage[] {
             name: c.name,
             args: c.args,
           })),
+          // Replayed verbatim. `@langchain/google-genai` reads its thought signatures straight
+          // out of `additional_kwargs`, so this is the one place the sealed envelope is reopened
+          // — by the provider that sealed it.
+          ...(m.providerMetadata ? { additional_kwargs: m.providerMetadata } : {}),
         }),
       );
     }
@@ -286,11 +290,16 @@ function toModelResponse(message: AIMessage): ModelResponse {
     ...(c.id ? { id: c.id } : {}),
   }));
 
+  // Kept whole rather than picked apart: the platform does not know which keys a vendor needs,
+  // and guessing would silently drop the next one it adds.
+  const providerMetadata = message.additional_kwargs as Record<string, unknown> | undefined;
+
   return {
     text: textOf(message.content),
     inputTokens: usage?.input_tokens ?? 0,
     outputTokens: usage?.output_tokens ?? 0,
     ...(toolCalls.length ? { toolCalls } : {}),
+    ...(providerMetadata && Object.keys(providerMetadata).length ? { providerMetadata } : {}),
   };
 }
 

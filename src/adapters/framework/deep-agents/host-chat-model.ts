@@ -86,6 +86,12 @@ export class HostChatModel extends BaseChatModel {
     const message = new AIMessage({
       content: result.text,
       tool_calls: result.toolCalls.map((c) => ({ id: c.id, name: c.name, args: c.args })),
+      // Put back where the vendor's adapter expects to find it. Without this the graph's own
+      // history — and therefore the next request — loses the provider's opaque state, which for
+      // Gemini's reasoning models means the following turn is rejected outright.
+      ...(result.providerMetadata
+        ? { additional_kwargs: result.providerMetadata as Record<string, unknown> }
+        : {}),
       usage_metadata: {
         input_tokens: result.inputTokens,
         output_tokens: result.outputTokens,
@@ -132,12 +138,15 @@ function split(messages: BaseMessage[]): { system: string | null; turns: HostMes
       });
     } else if (m instanceof AIMessage || m.getType() === 'ai') {
       const calls = (m as AIMessage).tool_calls ?? [];
+      const metadata = (m as AIMessage).additional_kwargs as Record<string, unknown> | undefined;
       turns.push({
         role: 'assistant',
         content,
         ...(calls.length
           ? { toolCalls: calls.map((c) => ({ id: c.id ?? '', name: c.name, args: c.args })) }
           : {}),
+        // Carried back out of the graph's history so the provider can replay it.
+        ...(metadata && Object.keys(metadata).length ? { providerMetadata: metadata } : {}),
       });
     } else if (m instanceof HumanMessage || m.getType() === 'human') {
       turns.push({ role: 'user', content });
