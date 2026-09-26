@@ -8,7 +8,9 @@ import { withSeparateConnection } from '../../platform/persistence/tenant-connec
 import type { Database, EffectClass } from '../../platform/persistence/schema.types.js';
 import { SANDBOX, type Sandbox } from '../ports/sandbox.port.js';
 import { CredentialBroker } from '../identity/credential-broker.service.js';
-import { MCP_CLIENT, type McpClient } from '../ports/mcp-client.port.js';
+import {
+  MCP_CLIENT, MCP_TOOL_ERROR, type McpCallResult, type McpClient,
+} from '../ports/mcp-client.port.js';
 import { McpRegistryService } from '../mcp/mcp-registry.service.js';
 import { IndeterminateSideEffect, NotFound } from '../errors/platform.errors.js';
 import { newId } from '../../platform/ids.js';
@@ -257,7 +259,10 @@ export class ToolRuntime {
       sandbox_profile: binding.sandboxProfile,
       request: JSON.stringify(args.toolArgs),
       status: 'running',
-      started_at: sql`now()`,
+      // clock_timestamp(), not now(): now() is the TRANSACTION's start time, and since this row
+      // may be written on its own connection while `settle` runs on the step's older
+      // transaction, now() recorded ended_at BEFORE started_at. Wall time orders them correctly.
+      started_at: sql`clock_timestamp()`,
     });
 
     if (cached) {
@@ -304,6 +309,18 @@ export class ToolRuntime {
               : {}),
           });
 
+    if (!result.ok && result.error && isMcpToolError(result.error)) {
+      // The server answered and the TOOL failed. Recorded as a failure with the tool's result
+      // kept, while the loop still hands the model the full text -- a `failed` outcome is an
+      // observation the agent can react to, not a run failure, and `retryable: false` keeps
+      // it off any retry path meant for transport failures.
+      await this.settle(tx, invocationId, 'failed', result.output ?? null, {
+        code: MCP_TOOL_ERROR,
+        message: truncate(result.error.message, RECORDED_ERROR_MAX_CHARS),
+      });
+      return { kind: 'failed', invocationId, error: { message: result.error.message, retryable: false } };
+    }
+
     if (!result.ok) {
       await this.settle(tx, invocationId, 'failed', null, result.error ?? null);
       return {
@@ -335,7 +352,7 @@ export class ToolRuntime {
     binding: ToolBinding,
     args: { namespaceId: string; tenantRef: string; toolArgs: Record<string, unknown> },
     headers: Record<string, string>,
-  ): Promise<{ ok: boolean; output?: unknown; error?: { message: string; retryable: boolean }; instanceId: string }> {
+  ): Promise<{ ok: boolean; output?: unknown; error?: McpCallResult['error']; instanceId: string }> {
     if (!binding.mcpServerId || !binding.mcpToolName) {
       return {
         instanceId: 'mcp',
@@ -431,7 +448,7 @@ export class ToolRuntime {
         status,
         response: response === undefined ? null : JSON.stringify(response),
         error: error ? JSON.stringify(error) : null,
-        ended_at: sql`now()`,
+        ended_at: sql`clock_timestamp()`,
       })
       .where('id', '=', id)
       .execute();
@@ -445,6 +462,15 @@ export class ToolRuntime {
     return binding;
   }
 }
+
+/** `tool_invocations.error.message` cap for a tool error; the full text is in `response`. */
+const RECORDED_ERROR_MAX_CHARS = 2_000;
+
+const isMcpToolError = (error: { message: string }): boolean =>
+  (error as { code?: unknown }).code === MCP_TOOL_ERROR;
+
+const truncate = (text: string, max: number): string =>
+  text.length > max ? `${text.slice(0, max)}…` : text;
 
 const renderKey = (tpl: string, vars: Record<string, string>): string =>
   tpl.replace(/\$\{(\w+)\}/g, (_, k: string) => vars[k] ?? `\${${k}}`);

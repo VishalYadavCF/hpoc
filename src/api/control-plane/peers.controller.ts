@@ -10,7 +10,7 @@ import { ApiTags } from '@nestjs/swagger';
 const registerBody = z
   .object({
     name: z.string().min(1).max(120),
-    binding: z.enum(['local', 'remote']),
+    binding: z.enum(['local', 'remote', 'inbound']),
     localAgentName: z.string().min(1).optional(),
     localAgentNamespace: z.string().min(1).optional(),
     endpointUrl: z.string().url().optional(),
@@ -20,6 +20,8 @@ const registerBody = z
     failureMode: z.enum(['contain', 'propagate']).default('contain'),
     timeoutMs: z.number().int().positive().max(3_600_000).default(300_000),
     inboundTrust: z.enum(['self', 'delegated_identity']).default('self'),
+    /** 0032: `task` (A2A 0.3.0) or `message` (one synchronous kind:"message" reply). */
+    replyMode: z.enum(['task', 'message']).default('task'),
   })
   .strict();
 
@@ -68,6 +70,7 @@ export class PeersController {
       failureMode: d.failureMode,
       timeoutMs: d.timeoutMs,
       inboundTrust: d.inboundTrust,
+      replyMode: d.replyMode,
     });
   }
 

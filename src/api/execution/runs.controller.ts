@@ -216,7 +216,11 @@ export class RunsController {
   @Doc({
     summary: 'List the tool invocations a run made',
     description:
-      'Every effect the run had, with its contract and idempotency key (§4.5).',
+      'Every effect the run had, with its contract and idempotency key (§4.5), its ' +
+      '`status` (`failed` for a tool that reported an error, e.g. an MCP `isError` result, ' +
+      'with `error.code` `mcp_tool_error`), the arguments it was called with (`request`) and ' +
+      'what it returned (`response`). A payload offloaded to an artifact is returned as ' +
+      '`request_artifact_id` / `response_artifact_id` with the inline field null.',
   })
   @Get(':id/tool-invocations')
   async toolInvocations(@Param('id') id: string): Promise<unknown> {

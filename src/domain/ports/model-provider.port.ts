@@ -79,6 +79,11 @@ export interface ModelResponse {
   toolCalls?: ToolCall[];
   /** Opaque provider state to replay on the next turn. See `ProviderMetadata`. */
   providerMetadata?: ProviderMetadata;
+  /**
+   * Why the vendor stopped (`STOP`, `MAX_TOKENS`, `MALFORMED_FUNCTION_CALL`, `SAFETY`, ...), when it
+   * says. Diagnostic only: it is what makes an empty completion explainable rather than silent.
+   */
+  finishReason?: string;
 }
 
 /**

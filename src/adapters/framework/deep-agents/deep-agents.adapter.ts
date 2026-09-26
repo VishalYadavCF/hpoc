@@ -3,6 +3,7 @@ import {
   CompositeBackend,
   StoreBackend,
   createDeepAgent,
+  createFilesystemMiddleware,
   createHarnessProfile,
   createMemoryMiddleware,
   createSkillsMiddleware,
@@ -10,10 +11,10 @@ import {
 } from 'deepagents';
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import { ToolStrategy } from 'langchain';
+import { ToolStrategy, createMiddleware } from 'langchain';
 import { Command, interrupt } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph';
-import { HumanMessage } from '@langchain/core/messages';
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type {
   FrameworkAdapter,
@@ -179,6 +180,7 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
     // Concrete `StructuredTool`, not the interface: DeepAgents' SubAgent config wants the
     // class, and `tool()` returns one -- the widening happens only where it is inferred.
     const boundTools = this.toolsFor(session, ledger) as unknown as StructuredTool[];
+    const exclusions = excludedToolsMiddleware(profile.excludedTools, compositeBackend);
 
     const agent = createDeepAgent({
       model: new HostChatModel(host, [...profile.excludedTools]),
@@ -189,7 +191,7 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
       // agents. A registered sub-agent -- own version, own policy, own budget -- is
       // `delegate_to_<alias>` instead, and is a separate run.
       subagents: [
-        ...inlineSubAgentsFor(session, backend, boundTools),
+        ...inlineSubAgentsFor(session, backend, boundTools, exclusions),
         ...registeredInlineFor(session, backend, ledger),
       ],
       systemPrompt: {
@@ -203,6 +205,8 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
       // `backend` accordingly.
       backend: compositeBackend,
       middleware: [
+        // §17.2 tools.deny, enforced rather than only hidden. See `excludedToolsMiddleware`.
+        ...exclusions,
         // Progressive disclosure: names and descriptions go in the prompt, bodies are
         // read on demand -- by the model, via `read_file` through THIS run's composite, not
         // by this middleware fetching them upfront. `backend.skillSources()`/`skillPath()`
@@ -365,6 +369,7 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
             host,
             t.ref,
             runtime?.toolCallId,
+            args,
             () => host.callTool(t.ref, args),
             `tool ${t.ref}`,
           ),
@@ -389,6 +394,7 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
             host,
             a.alias,
             runtime?.toolCallId,
+            args,
             () => host.delegate(a.alias, args.input ?? null),
             `delegation to ${a.alias}`,
           ),
@@ -414,6 +420,7 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
             host,
             p.alias,
             runtime?.toolCallId,
+            args,
             () => host.peerCall(p.alias, args.input ?? null),
             `peer call to ${p.alias}`,
           ),
@@ -456,6 +463,7 @@ function inlineSubAgentsFor(
   session: RunSession,
   backend: PlatformBackend,
   boundTools: StructuredTool[],
+  exclusions: SubAgent['middleware'] = [],
 ): SubAgent[] {
   return session.spec.inlineSubAgents.map((helper) => {
     const skills = helper.skills
@@ -476,6 +484,9 @@ function inlineSubAgentsFor(
       // Custom sub-agents do NOT inherit the main agent's skills, so a helper that must
       // follow a pinned procedure has to be handed the path explicitly.
       ...(skills.length ? { skills } : {}),
+      // Nor its middleware: a helper is this agent, under this agent's policy, and would
+      // otherwise get DeepAgents' default file and todo tools back.
+      ...(exclusions?.length ? { middleware: exclusions } : {}),
     };
   });
 }
@@ -538,6 +549,7 @@ function registeredInlineFor(
               childHost,
               t.ref,
               runtime?.toolCallId,
+              args,
               () => childHost.callTool(t.ref, args),
               `tool ${t.ref} (${binding.alias})`,
             ),
@@ -581,6 +593,23 @@ function registeredInlineFor(
  * identical line items) has two distinct calls, and merging them would be the same bug
  * pointed the other way.
  *
+ * ## An id is only a replay when it can be one
+ *
+ * Model-minted ids are not guaranteed unique across a run -- the provider mints them, not
+ * us. Answered on id alone, a reused id got the FIRST call's recorded answer: no dispatch,
+ * no tool_call step, and a model re-sending a corrected call (`dryRun: false`) was handed
+ * the dry run's result until the recursion limit. So a recorded answer is returned only
+ *
+ *  - for a call settled on an EARLIER drive: LangGraph re-executes a super-step only on
+ *    resume, never within a drive (no retry policy is configured), so a hit on a call
+ *    settled during this drive is a reused id, not a replay; and
+ *  - when the call asks for the same tool with the same arguments it did then -- a
+ *    replayed call comes from the same checkpointed message, so it always does.
+ *
+ * Anything else is a new call and is dispatched. A snapshot written before `requests`
+ * existed is matched on id alone, as it was, so a run suspended across the upgrade
+ * resumes exactly as it would have.
+ *
  * ## Why not rely on the platform's idempotency key
  *
  * `tool_invocations.idempotency_key` is rendered from `{runId, stepId}` and a replay gets
@@ -589,22 +618,34 @@ function registeredInlineFor(
  */
 class ReplayLedger {
   private readonly settled: Map<string, string>;
+  /** What each settled call asked for (`requestKey`), so a reused id is not taken for a replay. */
+  private readonly requests: Map<string, string>;
+  /** Ids settled on an earlier drive: the only calls a replayed super-step can re-execute. */
+  private readonly replayable: ReadonlySet<string>;
   private readonly resume: { value: unknown; ref: string | null } | null;
   private resumeTaken = false;
 
   constructor(state: unknown, resume: { value: unknown; ref: string | null } | null) {
-    const saved = (state as { settled?: Record<string, string> } | null)?.settled;
-    this.settled = new Map(Object.entries(saved ?? {}));
+    const saved = state as { settled?: Record<string, string>; requests?: Record<string, string> } | null;
+    this.settled = new Map(Object.entries(saved?.settled ?? {}));
+    this.requests = new Map(Object.entries(saved?.requests ?? {}));
+    this.replayable = new Set(this.settled.keys());
     this.resume = resume;
   }
 
   /** What this exact call returned on an earlier drive, if it completed then. */
-  recall(callId: string | undefined): string | undefined {
-    return callId ? this.settled.get(callId) : undefined;
+  recall(callId: string | undefined, ref: string, args: unknown): string | undefined {
+    if (!callId || !this.replayable.has(callId)) return undefined;
+    const asked = this.requests.get(callId);
+    if (asked !== undefined && asked !== requestKey(ref, args)) return undefined;
+    return this.settled.get(callId);
   }
 
-  record(callId: string | undefined, output: string): string {
-    if (callId) this.settled.set(callId, output);
+  record(callId: string | undefined, ref: string, args: unknown, output: string): string {
+    if (callId) {
+      this.settled.set(callId, output);
+      this.requests.set(callId, requestKey(ref, args));
+    }
     return output;
   }
 
@@ -626,9 +667,22 @@ class ReplayLedger {
   }
 
   /** The opaque snapshot handed to `host.saveState`, checkpointed with the suspension. */
-  snapshot(): { settled: Record<string, string> } {
-    return { settled: Object.fromEntries(this.settled) };
+  snapshot(): { settled: Record<string, string>; requests: Record<string, string> } {
+    return { settled: Object.fromEntries(this.settled), requests: Object.fromEntries(this.requests) };
   }
+}
+
+/** A call's tool and arguments, key-order independent. */
+const requestKey = (ref: string, args: unknown): string => `${ref}\u0000${JSON.stringify(sortedKeys(args))}`;
+
+function sortedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortedKeys);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => [k, sortedKeys(v)]),
+  );
 }
 
 /**
@@ -657,21 +711,22 @@ async function settle(
   host: RunHost,
   ref: string,
   callId: string | undefined,
+  args: unknown,
   invoke: () => Promise<Awaited<ReturnType<RunHost['callTool']>>>,
   what: string,
 ): Promise<string> {
   // Already done on an earlier drive. Returning the recorded answer is what keeps a
   // replayed super-step from repeating the calls that had nothing to do with the wait.
-  const done = ledger.recall(callId);
+  const done = ledger.recall(callId, ref, args);
   if (done !== undefined) return done;
 
   // This is the call the platform suspended on, and it has since settled it. Reaching the
   // host here would execute the approved payment a second time.
-  if (ledger.claimsResume(ref)) return ledger.record(callId, render(ledger.takeResume()));
+  if (ledger.claimsResume(ref)) return ledger.record(callId, ref, args, render(ledger.takeResume()));
 
   const outcome = await invoke();
-  if (outcome.kind === 'ok') return ledger.record(callId, render(outcome.output));
-  if (outcome.kind === 'error') return ledger.record(callId, `error: ${outcome.message}`);
+  if (outcome.kind === 'ok') return ledger.record(callId, ref, args, render(outcome.output));
+  if (outcome.kind === 'error') return ledger.record(callId, ref, args, `error: ${outcome.message}`);
 
   // Recorded BEFORE interrupting, because `interrupt()` does not return -- it throws a
   // control signal that unwinds the graph. Saving afterwards would save nothing.
@@ -681,6 +736,68 @@ async function settle(
 
 const render = (value: unknown): string =>
   typeof value === 'string' ? value : JSON.stringify(value ?? null);
+
+/** DeepAgents' built-in filesystem tools (1.11.1 `FILESYSTEM_TOOL_NAMES`, not exported). */
+const FILESYSTEM_TOOLS = ['ls', 'read_file', 'write_file', 'edit_file', 'glob', 'grep', 'execute'];
+
+/**
+ * §17.2 `tools.deny`, applied to DeepAgents' OWN tools, which never reach `host.callTool`.
+ *
+ * Hiding a tool's schema from the provider (`HostChatModel.bindTools`) was all this did, and
+ * it is not a deny: the middleware stayed installed, its prompt still described the tool,
+ * and a model that named it anyway -- `glob`, in a relay-dsl eval whose policy denied it --
+ * had it executed, with no step recorded. DeepAgents' own `excludedTools` cannot be used:
+ * it is read only from the process-global profile registry (see the harness comment in
+ * `run`), and even there it only filters the schemas too.
+ *
+ * So, per run:
+ *
+ *  - Middleware whose tools are denied is REPLACED, not wrapped. DeepAgents merges a custom
+ *    middleware with a built-in's name into that built-in's slot (`mergeMiddlewareStack`),
+ *    in the main agent and in the general-purpose sub-agent alike. The filesystem one is
+ *    rebuilt with only the allowed tools, and its prompt lists only those; it cannot be
+ *    narrowed without `read_file` (the library throws), so when that is denied it goes
+ *    entirely -- as do the todo and `task` middleware when their tool is denied. Nothing
+ *    denied is installed, and nothing denied is described.
+ *  - Whatever is still reachable by name is refused with an explicit tool error, so the
+ *    model is told rather than silently served. That covers a future built-in this list
+ *    does not know about.
+ */
+function excludedToolsMiddleware(
+  excluded: ReadonlySet<string>,
+  backend: CompositeBackend,
+): NonNullable<SubAgent['middleware']> {
+  if (excluded.size === 0) return [];
+  const replaced = [];
+
+  const allowedFs = FILESYSTEM_TOOLS.filter((name) => !excluded.has(name));
+  if (allowedFs.length < FILESYSTEM_TOOLS.length) {
+    replaced.push(
+      allowedFs.includes('read_file')
+        ? createFilesystemMiddleware({ backend, tools: allowedFs as never })
+        : createMiddleware({ name: 'FilesystemMiddleware' }),
+    );
+  }
+  if (excluded.has('write_todos')) replaced.push(createMiddleware({ name: 'todoListMiddleware' }));
+  if (excluded.has('task')) replaced.push(createMiddleware({ name: 'subAgentMiddleware' }));
+
+  const refuse = createMiddleware({
+    name: 'hpocExcludedToolsMiddleware',
+    wrapModelCall: (request, handler) =>
+      handler({ ...request, tools: request.tools.filter((t) => !excluded.has(String(t.name))) }),
+    wrapToolCall: (request, handler) => {
+      const { name, id } = request.toolCall;
+      if (!excluded.has(name)) return handler(request);
+      return new ToolMessage({
+        content: `Tool '${name}' is not available in this agent`,
+        tool_call_id: id ?? '',
+        name,
+        status: 'error',
+      });
+    },
+  });
+  return [...replaced, refuse] as NonNullable<SubAgent['middleware']>;
+}
 
 /**
  * A tool name a provider will accept.

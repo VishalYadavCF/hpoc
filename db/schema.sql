@@ -63,7 +63,7 @@ CREATE TYPE memory_provenance   AS ENUM ('user_input','model_output','tool_outpu
 CREATE TYPE artifact_state      AS ENUM ('live','expiring','deleted');
 CREATE TYPE trigger_type        AS ENUM ('http','event','webhook','schedule','callback'); -- §18.2
 CREATE TYPE mcp_transport       AS ENUM ('stdio','streamable_http');       -- §13.1
-CREATE TYPE peer_binding        AS ENUM ('local','remote');                -- §13.4
+CREATE TYPE peer_binding        AS ENUM ('local','remote','inbound');      -- §13.4, 0032
 CREATE TYPE speech_kind         AS ENUM ('stt','tts');
 
 CREATE TYPE enforcement_level   AS ENUM ('org','namespace','tenant','agent','worker_pool',
@@ -292,12 +292,21 @@ CREATE TABLE peers (
     -- The default is the strict reading -- the peer speaks for itself and nobody else.
     inbound_trust     text NOT NULL DEFAULT 'self'
                         CHECK (inbound_trust IN ('self', 'delegated_identity')),
+    -- How this caller expects `message/send` answered (0032): `task` is A2A 0.3.0, `message`
+    -- is one synchronous kind:"message" result, the dialect agentorchestratorsvc speaks.
+    reply_mode        text NOT NULL DEFAULT 'task'
+                        CHECK (reply_mode IN ('task', 'message')),
     status            registry_status NOT NULL DEFAULT 'active',
     created_at        timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, name),
+    -- `inbound` (0032): a caller identity we accept but never call -- no agent of ours, no
+    -- endpoint, no card. Compared as text so this matches what the migration could write.
     CONSTRAINT peer_binding_ck CHECK (
-        (binding = 'local'  AND local_agent_id IS NOT NULL)
-     OR (binding = 'remote' AND endpoint_url   IS NOT NULL AND agent_card IS NOT NULL)
+        (binding::text = 'local'   AND local_agent_id IS NOT NULL)
+     OR (binding::text = 'remote'  AND endpoint_url   IS NOT NULL AND agent_card IS NOT NULL)
+     OR (binding::text = 'inbound' AND local_agent_id IS NULL
+                                   AND endpoint_url   IS NULL
+                                   AND agent_card     IS NULL)
     ),
     -- A local peer's card is derived, so it has no signature to verify and no endpoint to
     -- fetch from.

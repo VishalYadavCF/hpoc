@@ -16,7 +16,11 @@ export interface RegisterPeerInput {
   orgId: string;
   namespaceId: string;
   name: string;
-  binding: 'local' | 'remote';
+  /**
+   * `inbound` is a caller we accept but never call (0032): it carries no agent, endpoint, card
+   * or key, and `resolve` refuses to route to it.
+   */
+  binding: 'local' | 'remote' | 'inbound';
   /** Local: the agent, by name, in any namespace of this org — that is the point. */
   localAgentName?: string;
   localAgentNamespace?: string;
@@ -26,6 +30,8 @@ export interface RegisterPeerInput {
   failureMode?: 'contain' | 'propagate';
   timeoutMs?: number;
   inboundTrust?: 'self' | 'delegated_identity';
+  /** How this caller expects `message/send` answered — see migration 0032. */
+  replyMode?: 'task' | 'message';
 }
 
 export interface ResolvedPeer {
@@ -115,6 +121,13 @@ export class PeerService {
           }
         }
       }
+    } else if (input.binding === 'inbound') {
+      // Refused rather than ignored: outbound material on an inbound-only row would look like
+      // something we could call, and the whole point of the binding is that we cannot.
+      if (input.localAgentName) rejections.push('localAgentName: an inbound peer has no agent of ours');
+      if (input.endpointUrl) rejections.push('endpointUrl: an inbound peer is never called');
+      if (input.agentCard) rejections.push('agentCard: an inbound peer is never called');
+      if (input.publicKey) rejections.push('publicKey: an inbound peer has no card to verify');
     } else {
       if (!input.endpointUrl) rejections.push('endpointUrl: required for a remote binding');
       if (!input.agentCard) rejections.push('agentCard: required for a remote binding');
@@ -160,12 +173,16 @@ export class PeerService {
         failure_mode: input.failureMode ?? 'contain',
         timeout_ms: input.timeoutMs ?? 300_000,
         inbound_trust: input.inboundTrust ?? 'self',
+        reply_mode: input.replyMode ?? 'task',
       })
       .onConflict((oc) =>
         oc.columns(['org_id', 'name']).doUpdateSet({
           endpoint_url: input.binding === 'remote' ? (input.endpointUrl ?? null) : null,
           failure_mode: input.failureMode ?? 'contain',
           timeout_ms: input.timeoutMs ?? 300_000,
+          // Re-registering is how an operator changes these, so a value they passed must land.
+          ...(input.inboundTrust ? { inbound_trust: input.inboundTrust } : {}),
+          ...(input.replyMode ? { reply_mode: input.replyMode } : {}),
         }),
       )
       .returning(['id', 'name'])
@@ -205,6 +222,13 @@ export class PeerService {
       }
       if (row.status !== 'active') {
         rejections.push(`peers: "${name}" is ${row.status}`);
+        continue;
+      }
+      if (row.binding === 'inbound') {
+        // The one place an outbound peer is resolved, so the one place this has to hold: an
+        // inbound peer has no agent and no endpoint, and routing to it would reach the local
+        // transport with nothing to run. Refused at admission, never discovered mid-run.
+        rejections.push(`peers: "${name}" is an inbound-only caller and cannot be called`);
         continue;
       }
       resolved.push({
@@ -255,12 +279,26 @@ export class PeerService {
     const spec = (version?.spec ?? {}) as { skills?: string[] };
     const skills = await this.skillDescriptors(agent.id, spec.skills ?? []);
 
+    // Every field below that the A2A schema marks required is always present, never null.
+    // agentorchestratorsvc parses cards into a2a-java 0.2.5's `io.a2a.spec.AgentCard`, whose
+    // constructors reject a null description, provider url or skill description/tags. A
+    // rejected card is not dropped -- the loader falls back to hand-parsing it and still maps its
+    // skills -- but the fallback never caches the card, so dispatch finds no agent to call:
+    // discoverable, never callable, and nothing in either service says so.
     const card: AgentCard = {
       protocolVersion: A2A_PROTOCOL_VERSION,
       name: agent.name,
-      description: agent.description,
-      url: `${baseUrl.replace(/\/$/, '')}/a2a/v1`,
-      provider: { organization: process.env['A2A_PROVIDER_NAME'] ?? 'general-agent-platform' },
+      description:
+        agent.description ??
+        (skills.length ? `Skills: ${skills.map((s) => s.name).join(', ')}` : agent.name),
+      // Per-agent, because the caller routes by POSTing to exactly this URL and puts no agent
+      // name in the body (agentorchestratorsvc does not). The shared `/a2a/v1` endpoint still
+      // exists for callers that name the agent in `metadata.agent`.
+      url: `${baseUrl.replace(/\/$/, '')}/a2a/v1/agents/${encodeURIComponent(agent.name)}`,
+      provider: {
+        organization: process.env['A2A_PROVIDER_NAME'] ?? 'general-agent-platform',
+        url: process.env['A2A_PROVIDER_URL'] ?? baseUrl.replace(/\/$/, ''),
+      },
       version: String(version?.version ?? 1),
       capabilities: { ...A2A_CAPABILITIES },
       defaultInputModes: ['text/plain', 'application/json'],
@@ -296,7 +334,15 @@ export class PeerService {
     const seen = new Set<string>();
     return rows
       .filter((r) => (seen.has(r.name) ? false : (seen.add(r.name), true)))
-      .map((r) => ({ id: r.name, name: r.name, description: r.when_to_use ?? r.description }));
+      // `tags` is required on an A2A AgentSkill, and a2a-java's card model -- which the
+      // production orchestrator parses cards into -- rejects a skill without it and falls back
+      // to hand-parsing. Empty is honest: hpoc has no skill taxonomy to put there.
+      .map((r) => ({
+        id: r.name,
+        name: r.name,
+        description: r.when_to_use ?? r.description ?? r.name,
+        tags: [] as string[],
+      }));
   }
 
   /** Re-verifies a stored remote card against the key on file (§13.6). */

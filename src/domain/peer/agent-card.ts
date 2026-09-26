@@ -11,10 +11,12 @@ import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'nod
 export interface AgentCard {
   protocolVersion: string;
   name: string;
-  description: string | null;
+  /** Required by the A2A schema; a2a-java rejects a card without one. */
+  description: string;
   /** Where a remote caller sends JSON-RPC. Absent for a card describing a local peer. */
   url: string | null;
-  provider: { organization: string };
+  /** `url` is required alongside `organization` by the A2A schema and by a2a-java. */
+  provider: { organization: string; url: string };
   version: string;
   capabilities: {
     streaming: boolean;
@@ -23,7 +25,7 @@ export interface AgentCard {
   };
   defaultInputModes: string[];
   defaultOutputModes: string[];
-  skills: { id: string; name: string; description: string | null }[];
+  skills: { id: string; name: string; description: string; tags: string[] }[];
 }
 
 export interface SignedAgentCard extends AgentCard {

@@ -430,7 +430,8 @@ export interface AgentVersionCollectionsTable {
 
 export interface PeersTable {
   id: Generated<string>; org_id: string; namespace_id: string; name: string;
-  binding: 'local' | 'remote';
+  /** `inbound` (0032): a caller we accept but never call — no agent, endpoint or card. */
+  binding: 'local' | 'remote' | 'inbound';
   local_agent_id: string | null; endpoint_url: string | null;
   protocol_version: string; residency: Residency;
   agent_card: Json | null; card_signature: string | null; card_verified_at: Ts | null;
@@ -439,6 +440,8 @@ export interface PeersTable {
   timeout_ms: Generated<number>;
   public_key: string | null; card_fetched_at: Ts | null;
   inbound_trust: Generated<'self' | 'delegated_identity'>;
+  /** 0032: how this caller expects `message/send` answered. */
+  reply_mode: Generated<'task' | 'message'>;
 }
 
 export interface AgentVersionPeersTable {

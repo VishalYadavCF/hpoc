@@ -216,7 +216,14 @@ function geminiSafeSchema(node: unknown): unknown {
   if (!node || typeof node !== 'object') return node;
 
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+  const source = node as Record<string, unknown>;
+  for (const [key, value] of Object.entries(source)) {
+    // Gemini's Schema has `anyOf` and no `oneOf`. Every variant is kept; "exactly one" relaxes
+    // to "at least one", which is the same thing for discriminated variants.
+    if (key === 'oneOf' && source['anyOf'] === undefined) {
+      out['anyOf'] = geminiSafeSchema(value);
+      continue;
+    }
     if (GEMINI_UNSUPPORTED_KEYWORDS.has(key)) continue;
 
     if (key === 'type' && Array.isArray(value)) {
@@ -227,6 +234,13 @@ function geminiSafeSchema(node: unknown): unknown {
       continue;
     }
     out[key] = geminiSafeSchema(value);
+  }
+  // A union's discriminator is often `const`, and dropping it made every variant identical --
+  // the union collapsed by another route. Gemini's enum is string-only, so a string const
+  // becomes a one-value enum; any other const is still dropped, as before.
+  if (typeof source['const'] === 'string' && out['enum'] === undefined) {
+    out['enum'] = [source['const']];
+    out['type'] ??= 'string';
   }
   return out;
 }
@@ -293,6 +307,10 @@ function toModelResponse(message: AIMessage): ModelResponse {
   // Kept whole rather than picked apart: the platform does not know which keys a vendor needs,
   // and guessing would silently drop the next one it adds.
   const providerMetadata = message.additional_kwargs as Record<string, unknown> | undefined;
+  // Each LangChain vendor adapter spells it differently: Gemini `finishReason`, OpenAI
+  // `finish_reason`, Anthropic `stop_reason`.
+  const meta = (message.response_metadata ?? {}) as Record<string, unknown>;
+  const finishReason = meta['finishReason'] ?? meta['finish_reason'] ?? meta['stop_reason'];
 
   return {
     text: textOf(message.content),
@@ -300,6 +318,7 @@ function toModelResponse(message: AIMessage): ModelResponse {
     outputTokens: usage?.output_tokens ?? 0,
     ...(toolCalls.length ? { toolCalls } : {}),
     ...(providerMetadata && Object.keys(providerMetadata).length ? { providerMetadata } : {}),
+    ...(typeof finishReason === 'string' ? { finishReason } : {}),
   };
 }
 

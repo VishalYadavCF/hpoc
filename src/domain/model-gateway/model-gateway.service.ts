@@ -113,9 +113,9 @@ export class ModelGateway {
     const credentials = await this.credentialsFor(args, model);
 
     try {
-      const response = await provider.complete(
-        this.providerRequest(args.request, model),
-        credentials,
+      const response = await this.completeNonEmpty(
+        model.ref,
+        () => provider.complete(this.providerRequest(args.request, model), credentials),
       );
       // Never cache a response carrying tool calls: the arguments are situational, and
       // replaying them would invoke a side effect for a different question.
@@ -135,14 +135,49 @@ export class ModelGateway {
       const fallbackProvider = this.providers.get(fallback.provider);
       if (!fallbackProvider) throw e;
 
-      const response = await fallbackProvider.complete(
-        this.providerRequest(args.request, fallback),
-        // The fallback is a different provider with a different secret. Reusing the
-        // first model's credentials would 401 and look like the fallback itself failing.
-        await this.credentialsFor(args, fallback),
+      // The fallback is a different provider with a different secret. Reusing the first
+      // model's credentials would 401 and look like the fallback itself failing.
+      const fallbackCredentials = await this.credentialsFor(args, fallback);
+      const response = await this.completeNonEmpty(
+        fallback.ref,
+        () => fallbackProvider.complete(this.providerRequest(args.request, fallback), fallbackCredentials),
       );
       return this.toResult(fallback, response, model.id);
     }
+  }
+
+  /**
+   * A completion with no text AND no tool call is a provider failure, not an answer.
+   *
+   * Gemini returns exactly that intermittently -- zero output tokens, and a finish reason such as
+   * `MALFORMED_FUNCTION_CALL` when it tried to call a tool and produced something unparseable. It
+   * used to flow straight through: the framework read "no tool call" as "done", the run was marked
+   * `completed` with an empty answer, and an A2A caller was told the work succeeded when nothing
+   * had been done at all. Measured on relay-workflow-manager: a create request, one model step,
+   * 7,481 input tokens, 0 output, run `completed`, no workflow created.
+   *
+   * Retried once on the same model, because in practice the next attempt usually answers. A
+   * second empty is thrown as `upstream_failure`, which is what the fallback model -- or the
+   * run's own failure path -- exists to handle. No empty completion reaches the framework.
+   */
+  private async completeNonEmpty(
+    modelRef: string,
+    call: () => Promise<ModelResponse>,
+  ): Promise<ModelResponse> {
+    let response = await call();
+    if (!isEmptyCompletion(response)) return response;
+
+    this.log.warn(
+      `model ${modelRef} returned an empty completion (finishReason=${response.finishReason ?? 'unknown'}); retrying once`,
+    );
+    response = await call();
+    if (!isEmptyCompletion(response)) return response;
+
+    throw new PlatformError(
+      'upstream_failure',
+      `Model ${modelRef} returned an empty completion twice (finishReason=${response.finishReason ?? 'unknown'})`,
+      { modelRef, finishReason: response.finishReason ?? null },
+    );
   }
 
 
@@ -455,3 +490,6 @@ export class ModelGateway {
     return model;
   }
 }
+
+const isEmptyCompletion = (r: ModelResponse): boolean =>
+  !r.text?.trim() && !(r.toolCalls?.length);

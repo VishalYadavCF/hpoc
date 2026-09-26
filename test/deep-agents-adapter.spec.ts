@@ -39,7 +39,8 @@ class ScriptedHost implements RunHost {
   private turn = 0;
 
   constructor(
-    private readonly script: { text: string; toolCalls?: { name: string; args: Record<string, unknown> }[] }[],
+    /** A call's `id` is minted per turn unless the script pins one, as a provider may. */
+    private readonly script: { text: string; toolCalls?: { name: string; args: Record<string, unknown>; id?: string }[] }[],
     private readonly toolOutcome: (ref: string) => HostToolOutcome = () => ({ kind: 'ok', output: 'done' }),
   ) {}
 
@@ -263,6 +264,46 @@ describe('the framework drives the loop', () => {
     // only the bound set would leave them permanently invisible to the model -- which is
     // how "we adopted the framework" turns into "we adopted its import statement".
     expect(advertised.length).toBeGreaterThan(0);
+  });
+
+  it('keeps every variant of a union schema, for the model and for validation', async () => {
+    const variant = (op: string, field: string) => ({
+      type: 'object',
+      required: ['op', field],
+      properties: { op: { type: 'string', enum: [op] }, [field]: { type: 'string' } },
+    });
+    const inputSchema = {
+      type: 'object',
+      required: ['operations'],
+      properties: {
+        operations: {
+          type: 'array',
+          items: {
+            anyOf: [variant('insert_node', 'nodeId'), variant('set_trigger', 'trigger'), variant('set_workflow_metadata', 'name')],
+          },
+        },
+      },
+    };
+    const first = { operations: [{ op: 'insert_node', nodeId: 'n1' }] };
+    const middle = { operations: [{ op: 'set_trigger', trigger: 'webhook' }] };
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'relay.apply', args: first }] },
+      { text: '', toolCalls: [{ name: 'relay.apply', args: middle }] },
+      { text: 'done' },
+    ]);
+
+    await asTenant(() =>
+      adapter.run(session(host, {
+        spec: spec({ tools: [{ ref: 'relay.apply', description: 'Apply ops', inputSchema }] }),
+      })),
+    );
+
+    const advertised = host.modelCalls[0]!.tools!.find((t) => t.name === 'relay.apply')!.parameters as typeof inputSchema;
+    expect(advertised.properties.operations.items.anyOf.map((v) => v.properties.op.enum)).toEqual([
+      ['insert_node'], ['set_trigger'], ['set_workflow_metadata'],
+    ]);
+    // Neither is the last variant, which is all a collapsed schema would have let through.
+    expect(host.toolCalls).toEqual([{ ref: 'relay.apply', args: first }, { ref: 'relay.apply', args: middle }]);
   });
 
   it('surfaces a failed tool as information rather than killing the run (§13.5)', async () => {
@@ -508,6 +549,46 @@ describe('the policy shapes the framework surface too (Phase 5)', () => {
     expect((locked.modelCalls[0]!.tools ?? []).map((t) => t.name)).not.toContain('write_file');
   });
 
+  /** A policy-denied tool, called by name anyway: what the model sees, and what came back. */
+  const callDenied = async (excludedTools: string[]) => {
+    const host = new ScriptedHost([
+      { text: '', toolCalls: [{ name: 'glob', args: { pattern: '**/*prompt*' } }] },
+      { text: 'ok' },
+    ]);
+    const out = await asTenant(() =>
+      adapter.run(session(host, { spec: spec({ harness: { excludedTools, systemPromptSuffix: null } }) })),
+    );
+    return {
+      out,
+      offered: (host.modelCalls[0]!.tools ?? []).map((t) => t.name),
+      prompt: host.modelCalls[0]!.systemPrompt ?? '',
+      reply: host.modelCalls[1]?.messages.find((m) => m.role === 'tool')?.content,
+    };
+  };
+
+  it('refuses a denied framework tool the model calls anyway, and never describes it', async () => {
+    // relay-dsl-eval's deny list. Hiding the schemas was all that used to happen: `glob` still
+    // ran ("No files found matching pattern ...") and nothing recorded it.
+    const denied = ['write_todos', 'ls', 'read_file', 'write_file', 'edit_file', 'glob', 'grep', 'execute', 'task'];
+    const { out, offered, prompt, reply } = await callDenied(denied);
+
+    expect(out.type).toBe('complete');
+    expect(offered.filter((n) => denied.includes(n))).toEqual([]);
+    expect(reply).toBe("Tool 'glob' is not available in this agent");
+    // Not installed, so not described: no filesystem, todo or task section in the prompt.
+    expect(prompt).not.toMatch(/`glob`|write_todos|`task`|Filesystem Tools/);
+  });
+
+  it('narrows the filesystem tools when only some are denied', async () => {
+    const { offered, prompt, reply } = await callDenied(['glob']);
+
+    expect(offered).toContain('read_file');
+    expect(offered).not.toContain('glob');
+    expect(prompt).toContain('`read_file`');
+    expect(prompt).not.toContain('`glob`');
+    expect(reply).toBe("Tool 'glob' is not available in this agent");
+  });
+
   it('appends per-model tuning AFTER the registry prompt, not inside it', async () => {
     const host = new ScriptedHost([{ text: 'ok' }]);
     await asTenant(() =>
@@ -659,6 +740,66 @@ describe('a replayed super-step does not repeat its neighbours (Phase 7, §4.5)'
     // it would save nothing and the resumed run would re-read the balance.
     const saved = host.saved as { settled: Record<string, string> };
     expect(Object.values(saved.settled)).toContain('balance 500');
+  });
+
+  it('dispatches a later call that reuses an earlier call id, rather than replaying its answer', async () => {
+    // The provider mints ids, and nothing guarantees they are unique across a run. The ledger
+    // used to answer on id alone, so the corrected call got the dry run's result back, never
+    // reached the platform, and the agent looped on it until the recursion limit.
+    const dry = { dryRun: true, operations: [{ op: 'insert_node' }] };
+    const real = { operations: [{ op: 'insert_node' }] };
+    const host = new ScriptedHost(
+      [
+        { text: '', toolCalls: [{ id: 'fc-1', name: 'demo.lookup', args: dry }] },
+        { text: '', toolCalls: [{ id: 'fc-1', name: 'demo.lookup', args: dry }] },
+        { text: '', toolCalls: [{ id: 'fc-1', name: 'demo.lookup', args: real }] },
+        { text: 'applied' },
+      ],
+      () => ({ kind: 'ok', output: 'ok' }),
+    );
+
+    const out = await asTenant(() => adapter.run(session(host, { spec: twoTools })));
+
+    expect(out.type).toBe('complete');
+    // Every call the model made reached the host -- the exact repeat included, since within a
+    // drive nothing is a replay.
+    expect(host.toolCalls.map((c) => c.args)).toEqual([dry, dry, real]);
+  });
+
+  it('still replays across a resume when the reused id asks for something else', async () => {
+    const runId = `da-reuse-${Math.random().toString(36).slice(2, 8)}`;
+    threads.push(runId);
+    const first = new ScriptedHost(
+      [{
+        text: '',
+        toolCalls: [
+          { id: 'fc-1', name: 'demo.lookup', args: { id: 1 } },
+          { id: 'fc-2', name: 'demo.pay', args: { amount: 100 } },
+        ],
+      }],
+      (ref) => (ref === 'demo.pay' ? { kind: 'suspended', reason: 'approval', ref: 'demo.pay' } : { kind: 'ok', output: 'balance 500' }),
+    );
+    await asTenant(() => adapter.run(session(first, { runId, spec: twoTools })));
+
+    // Resumed: the super-step replays (fc-1 answered from the ledger, fc-2 from the approval),
+    // then the model reuses fc-1 for a different lookup, which must be dispatched.
+    const second = new ScriptedHost(
+      [
+        { text: '', toolCalls: [{ id: 'fc-1', name: 'demo.lookup', args: { id: 2 } }] },
+        { text: 'done' },
+      ],
+      () => ({ kind: 'ok', output: 'balance 700' }),
+    );
+    await asTenant(() =>
+      adapter.run(session(second, {
+        runId,
+        spec: twoTools,
+        state: JSON.parse(JSON.stringify(first.saved)) as unknown,
+        resume: { value: 'paid: receipt-9', ref: 'demo.pay', failed: false },
+      })),
+    );
+
+    expect(second.toolCalls).toEqual([{ ref: 'demo.lookup', args: { id: 2 } }]);
   });
 });
 

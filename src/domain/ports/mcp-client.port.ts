@@ -20,10 +20,18 @@ export interface McpServerRef {
   headers: Record<string, string>;
 }
 
+/**
+ * The call reached the server and the server answered, but the TOOL reported failure
+ * (`isError: true` on the result). Distinct from a transport failure: the JSON-RPC call
+ * succeeded, a retry would get the same answer, and the error text is for the model.
+ */
+export const MCP_TOOL_ERROR = 'mcp_tool_error';
+
 export interface McpCallResult {
   ok: boolean;
+  /** For an `mcp_tool_error`, the tool's error result (`{ isError: true, content }`). */
   content: unknown;
-  error?: { message: string; retryable: boolean };
+  error?: { message: string; retryable: boolean; code?: typeof MCP_TOOL_ERROR };
 }
 
 /**

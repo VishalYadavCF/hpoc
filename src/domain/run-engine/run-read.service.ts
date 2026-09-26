@@ -110,7 +110,7 @@ export class RunReadService {
    */
   async toolInvocations(runId: string) {
     await this.assertVisible(runId);
-    return this.db
+    const rows = await this.db
       .selectFrom('tool_invocations as ti')
       .innerJoin('tools as t', 't.id', 'ti.tool_id')
       .innerJoin('steps as s', 's.id', 'ti.step_id')
@@ -122,10 +122,18 @@ export class RunReadService {
         'ti.definition_hash', 'ti.idempotency_key', 'ti.attempt',
         'ti.authorized_principal_id', 'ti.capability_decision', 'ti.interaction_id',
         'ti.sandbox_profile', 'ti.error', 'ti.started_at', 'ti.ended_at',
+        'ti.status', 'ti.request', 'ti.request_artifact_id',
+        'ti.response', 'ti.response_artifact_id',
       ])
       .where('ti.run_id', '=', runId)
       .orderBy('s.seq')
       .execute();
+    // An offloaded payload is named by its artifact id, never inlined (as `checkpoints`).
+    return rows.map((r) => ({
+      ...r,
+      request: r.request_artifact_id !== null ? null : r.request,
+      response: r.response_artifact_id !== null ? null : r.response,
+    }));
   }
 
   async checkpoints(runId: string) {

@@ -44,7 +44,12 @@ export class QueueService {
         run_id: runId,
         worker_pool: opts.pool ?? 'default',
         priority: opts.priority ?? 100,
-        visible_at: opts.visibleAt ?? new Date(),
+        // The DATABASE clock, because `claim` compares against the database's `now()`. Stamping
+        // the app host's `new Date()` mixed two clocks: with the host 41ms ahead of Postgres
+        // (measured, Docker Desktop's VM clock after a sleep) every new row was invisible for
+        // 41ms, and a pod running ahead of the database would delay every run it enqueues by
+        // its skew. An explicit `visibleAt` is a deliberate future time and is kept as given.
+        visible_at: opts.visibleAt ?? sql<Date>`now()`,
       })
       .execute();
   }

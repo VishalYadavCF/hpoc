@@ -32,7 +32,14 @@ export class AgentService {
    * month may name a tool whose grant has since been revoked, and §17.5 wants that refused
    * at publish rather than discovered at run time.
    */
-  async publish(input: { name: string; owner: string; spec: unknown; exposeAsPeer?: boolean }) {
+  async publish(input: {
+    name: string;
+    owner: string;
+    spec: unknown;
+    exposeAsPeer?: boolean;
+    /** What the agent is for, in one line. Published as its A2A card's `description`. */
+    description?: string;
+  }) {
     const ctx = requireContext();
     const admission = await this.admission.admit({
       orgId: ctx.orgId,
@@ -50,9 +57,18 @@ export class AgentService {
           name: input.name,
           owner: input.owner,
           expose_as_peer: input.exposeAsPeer ?? false,
+          ...(input.description !== undefined ? { description: input.description } : {}),
         })
         .onConflict((oc) =>
-          oc.columns(['namespace_id', 'name']).doUpdateSet({ owner: input.owner, updated_at: new Date() }),
+          oc.columns(['namespace_id', 'name']).doUpdateSet({
+            owner: input.owner,
+            updated_at: new Date(),
+            // Applied on re-publish only when the caller SAID something. This used to update
+            // `owner` alone, so publishing a new version with `exposeAsPeer: true` left an
+            // existing agent unexposed -- undiscoverable over A2A with no error to say why.
+            ...(input.exposeAsPeer !== undefined ? { expose_as_peer: input.exposeAsPeer } : {}),
+            ...(input.description !== undefined ? { description: input.description } : {}),
+          }),
         )
         .returning(['id', 'name'])
         .executeTakeFirstOrThrow();

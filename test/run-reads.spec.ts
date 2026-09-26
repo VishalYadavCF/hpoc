@@ -165,6 +165,65 @@ describe('run subresources', () => {
     expect(error).toBeInstanceOf(NotFound);
   });
 
+  it('lists tool invocations with status, arguments and result, naming offloaded payloads', async () => {
+    const tool = await f.db
+      .selectFrom('tools').select('id')
+      .where('org_id', '=', f.orgId).where('ref', '=', 'demo.echo')
+      .executeTakeFirstOrThrow();
+    const artifact = async (label: string) =>
+      (await f.db.insertInto('artifacts').values({
+        org_id: f.orgId, namespace_id: f.namespaceId, tenant_ref: f.tenantRef,
+        content_hash: `reads-${label}-${SUFFIX}`, storage_uri: `mem://reads-${label}-${SUFFIX}`,
+        media_type: 'application/json', size_bytes: '1', encryption_key_ref: 'test',
+      }).returning('id').executeTakeFirstOrThrow()).id;
+    const offloadedRequest = await artifact('request');
+    const offloadedResponse = await artifact('response');
+
+    // Inserted out of order, to show the list is ordered by step, not by insertion.
+    for (const [seq, over] of [
+      [2, {
+        status: 'failed', request_artifact_id: offloadedRequest,
+        response_artifact_id: offloadedResponse,
+        error: JSON.stringify({ code: 'mcp_tool_error', message: 'bad op' }),
+      }],
+      [1, {
+        status: 'succeeded', request: JSON.stringify({ q: 'm-1' }),
+        response: JSON.stringify({ found: true }),
+      }],
+    ] as const) {
+      const step = await f.db
+        .insertInto('steps')
+        .values({
+          run_id: runIds[3]!, seq, kind: 'tool_call', status: over.status,
+          org_id: f.orgId, namespace_id: f.namespaceId, tenant_ref: f.tenantRef,
+        })
+        .returning('id').executeTakeFirstOrThrow();
+      await f.db.insertInto('tool_invocations').values({
+        step_id: step.id, run_id: runIds[3]!, thread_id: threadId,
+        org_id: f.orgId, namespace_id: f.namespaceId, tenant_ref: f.tenantRef,
+        tool_id: tool.id, origin: 'http', effects: ['read_only'],
+        tool_version: 1, sandbox_profile: 'http-egress', ...over,
+      }).execute();
+    }
+
+    const rows = await ctx(() => reads.toolInvocations(runIds[3]!));
+    expect(rows.map((r) => r.step_seq)).toEqual([1, 2]);
+    expect(rows[0]).toMatchObject({
+      tool_ref: 'demo.echo', status: 'succeeded',
+      request: { q: 'm-1' }, request_artifact_id: null,
+      response: { found: true }, response_artifact_id: null, error: null,
+    });
+    // An offloaded payload is named by its artifact, not inlined.
+    expect(rows[1]).toMatchObject({
+      status: 'failed',
+      request: null, request_artifact_id: offloadedRequest,
+      response: null, response_artifact_id: offloadedResponse,
+      error: { code: 'mcp_tool_error', message: 'bad op' },
+    });
+
+    await f.db.deleteFrom('artifacts').where('id', 'in', [offloadedRequest, offloadedResponse]).execute();
+  });
+
   it('says so when there is no lineage, rather than implying a gap in the trace', async () => {
     const lineage = await ctx(() => reads.lineage(runIds[0]!));
     expect(lineage.edges).toEqual([]);

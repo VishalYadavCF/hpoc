@@ -1196,6 +1196,21 @@ export class RunLoop {
       };
     }
 
+    // Admission already refuses an inbound-only peer (PeerService.resolve), so reaching this
+    // means the row changed after the version was published. Failing the step is the same
+    // contained outcome as an inactive peer; routing onward would reach a transport with no
+    // agent and no endpoint to call.
+    if (peer.binding === 'inbound') {
+      const seq = await this.failStep(
+        tx, run, version, step.id, `Peer "${peer.name}" is an inbound-only caller and cannot be called`,
+      );
+      return {
+        kind: 'continue',
+        observation: { kind: 'delegation_error', content: `peer ${peer.name} cannot be called` },
+        seq,
+      };
+    }
+
     const target = {
       id: peer.id,
       name: peer.name,
@@ -1316,6 +1331,12 @@ export class RunLoop {
       .select(['id', 'name', 'binding', 'local_agent_id', 'endpoint_url', 'timeout_ms', 'failure_mode'])
       .where('id', '=', pending.peerId)
       .executeTakeFirstOrThrow();
+
+    // This call was dispatched, so the peer was callable then; a binding is never rewritten in
+    // place. Throwing (the run fails) beats asking a transport about a task it never sent.
+    if (peer.binding === 'inbound') {
+      throw new Error(`Peer "${peer.name}" became inbound-only while a call to it was pending`);
+    }
 
     const target = {
       id: peer.id,
@@ -1530,6 +1551,16 @@ export class RunLoop {
       cache: version.cache,
     });
 
+    // Tool calls travel WITH the text. A framework reading only the text would see an
+    // empty answer and finish, silently dropping the request the model just made.
+    const toolCalls = (result.toolCalls ?? []).map((c, i) => ({
+      // An id is REQUIRED downstream: every vendor pairs a tool result to its request
+      // by id, so one synthesised here beats one invented per provider adapter.
+      id: c.id ?? `call_${stepSeq}_${i}`,
+      name: c.name,
+      args: c.args,
+    }));
+
     await tx
       .updateTable('steps')
       .set({
@@ -1543,7 +1574,10 @@ export class RunLoop {
         input_tokens: result.inputTokens,
         output_tokens: result.outputTokens,
         cost_micros: String(result.costMicros),
-        output: JSON.stringify({ text: result.text }),
+        // The calls are recorded with the text: a turn whose text is "" is usually a turn that
+        // asked for tools, and without them the step says nothing about what the model did --
+        // nor, when a call never becomes a tool_call step, that it was asked for at all.
+        output: JSON.stringify({ text: result.text, ...(toolCalls.length ? { toolCalls } : {}) }),
         ended_at: sql`now()`,
         latency_ms: Date.now() - startedAt,
       })
@@ -1603,15 +1637,7 @@ export class RunLoop {
     return {
       result: {
         text: result.text,
-        // Tool calls travel WITH the text. A framework reading only the text would see an
-        // empty answer and finish, silently dropping the request the model just made.
-        toolCalls: (result.toolCalls ?? []).map((c, i) => ({
-          // An id is REQUIRED downstream: every vendor pairs a tool result to its request
-          // by id, so one synthesised here beats one invented per provider adapter.
-          id: c.id ?? `call_${stepSeq}_${i}`,
-          name: c.name,
-          args: c.args,
-        })),
+        toolCalls,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         // Opaque provider state, handed to the framework so it rides the graph's own message

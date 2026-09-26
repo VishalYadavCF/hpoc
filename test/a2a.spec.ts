@@ -183,12 +183,12 @@ const sampleCard = (): AgentCard => ({
   name: 'billing-planner',
   description: 'Plans billing corrections',
   url: 'https://peer.example/a2a/v1',
-  provider: { organization: 'other-team' },
+  provider: { organization: 'other-team', url: 'https://peer.example' },
   version: '3',
   capabilities: { ...A2A_CAPABILITIES },
   defaultInputModes: ['text/plain'],
   defaultOutputModes: ['text/plain'],
-  skills: [{ id: 'plan', name: 'plan', description: 'Draft a correction plan' }],
+  skills: [{ id: 'plan', name: 'plan', description: 'Draft a correction plan', tags: [] }],
 });
 
 describe('agent card signing (§13.6)', () => {

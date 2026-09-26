@@ -47,6 +47,8 @@ const agentRunBody = z.object({
 const publishBody = z.object({
   name: z.string().min(1).max(100),
   owner: z.string().min(1).max(200),
+  /** One line on what the agent is for. Becomes its A2A card's `description`. */
+  description: z.string().min(1).max(1_000).optional(),
   agent: z.unknown(),
   exposeAsPeer: z.boolean().optional(),
 });
@@ -81,6 +83,7 @@ export class AgentsController {
       owner: parsed.data.owner,
       spec: parsed.data.agent,
       exposeAsPeer: parsed.data.exposeAsPeer,
+      ...(parsed.data.description ? { description: parsed.data.description } : {}),
     });
   }
 
