@@ -81,6 +81,8 @@ export interface ToolTemplatesTable {
   /** The reachable surface. A spec supplies only a path below `path_prefix`. */
   endpoint_url: string; allowed_methods: Generated<string[]>; path_prefix: string;
   static_headers: JsonD;
+  /** A third-party credential by NAME; the broker sends it instead of its own token. */
+  credential_ref: string | null;
   max_instances: Generated<number>;
   status: Generated<RegistryStatus>; created_at: TsD;
 }
@@ -102,6 +104,8 @@ export interface ToolsTable {
   arg_wrapper_key: string | null;
   arg_placement: 'query' | 'body' | 'none' | null;
   static_headers: JsonD;
+  /** Copied from the template on instantiation; NULL means the broker's platform token. */
+  credential_ref: string | null;
   code_runtime: 'node' | 'python' | null;
   code_source: string | null;
 }

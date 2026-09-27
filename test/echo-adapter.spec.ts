@@ -202,3 +202,22 @@ describe('pipeline adapter — a framework with no checkpointer of its own', () 
     });
   });
 });
+
+describe('echo adapter — thread continuity (§3)', () => {
+  const history = [
+    { role: 'user' as const, content: 'Create workflow cart_recovery_002' },
+    { role: 'assistant' as const, content: 'Created workflow 19940.' },
+  ];
+
+  it('puts prior thread turns before the input', async () => {
+    const host = new FakeHost();
+    await new EchoAdapter().run(session(host, { history }));
+    expect(host.modelCalls[0]!.messages).toEqual([...history, { role: 'user', content: 'hello' }]);
+  });
+
+  it('is unchanged when the run has no prior turns', async () => {
+    const host = new FakeHost();
+    await new EchoAdapter().run(session(host, { history: [] }));
+    expect(host.modelCalls[0]!.messages).toEqual([{ role: 'user', content: 'hello' }]);
+  });
+});

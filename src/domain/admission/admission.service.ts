@@ -397,7 +397,7 @@ export class AdmissionService {
       .select((eb) => [
         'id', 'ref', 'version', 'status', 'endpoint_url', 'path_prefix',
         'allowed_methods', 'residency', 'sandbox_profile', 'timeout_ms', 'max_retries',
-        'static_headers', 'max_instances', 'namespace_id',
+        'static_headers', 'credential_ref', 'max_instances', 'namespace_id',
         // ::text[] deliberately, for the same reason as `tools` above: pg hands back the
         // literal '{a,b}' for a custom enum array and Array methods silently do not exist.
         sql<EffectClass[]>`default_effects::text[]`.as('default_effects'),
@@ -492,7 +492,8 @@ export class AdmissionService {
     def: InlineToolSpec,
     template: { id: string; endpoint_url: string; residency: 'internal' | 'external';
                 sandbox_profile: string; timeout_ms: number; max_retries: number;
-                static_headers: unknown; default_effects: EffectClass[] },
+                static_headers: unknown; credential_ref: string | null;
+                default_effects: EffectClass[] },
     method: string,
     path: string,
   ): Promise<AdmittedTool> {
@@ -542,6 +543,9 @@ export class AdmissionService {
             max_retries: template.max_retries,
             endpoint_url: template.endpoint_url,
             static_headers: JSON.stringify(template.static_headers ?? {}),
+            // A NAME, never a value, and not expressible in a spec: an inline tool can only use
+            // the credential its template was given.
+            credential_ref: template.credential_ref,
             // From the spec: the shape of the call, and nothing else.
             http_method: method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
             path_template: path,

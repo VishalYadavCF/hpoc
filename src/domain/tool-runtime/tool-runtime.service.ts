@@ -12,7 +12,7 @@ import {
   MCP_CLIENT, MCP_TOOL_ERROR, type McpCallResult, type McpClient,
 } from '../ports/mcp-client.port.js';
 import { McpRegistryService } from '../mcp/mcp-registry.service.js';
-import { IndeterminateSideEffect, NotFound } from '../errors/platform.errors.js';
+import { IndeterminateSideEffect, NotFound, PlatformError } from '../errors/platform.errors.js';
 import { newId } from '../../platform/ids.js';
 
 export interface ToolBinding {
@@ -46,6 +46,11 @@ export interface ToolBinding {
   /** Nests the MODEL's arguments under this key before bound arguments are applied. */
   argWrapperKey: string | null;
   staticHeaders: Record<string, string>;
+  /**
+   * A third-party credential by NAME (migration 0033). Set, the broker sends that API's own
+   * token instead of the platform's; NULL, the platform token as always.
+   */
+  credentialRef?: string | null;
   /** §8.1 `origin = 'function'`: the body the sandbox runs. Null for outbound-call tools. */
   codeRuntime: 'node' | 'python' | null;
   codeSource: string | null;
@@ -104,7 +109,7 @@ export class ToolRuntime {
         't.ref', 't.origin', 't.version', 't.endpoint_url', 't.sandbox_profile',
         't.timeout_ms', 't.definition_hash', 't.description', 't.input_schema',
         't.http_method', 't.path_template', 't.arg_placement', 't.arg_wrapper_key',
-        't.static_headers',
+        't.static_headers', 't.credential_ref',
         't.code_runtime', 't.code_source',
         't.mcp_server_id', 't.mcp_tool_name',
         // See admission.service.ts: a custom enum array needs the cast to become an array.
@@ -127,6 +132,7 @@ export class ToolRuntime {
       argPlacement: r.arg_placement,
       argWrapperKey: r.arg_wrapper_key,
       staticHeaders: (r.static_headers ?? {}) as Record<string, string>,
+      credentialRef: r.credential_ref,
       codeRuntime: r.code_runtime,
       codeSource: r.code_source,
       definitionHash: r.definition_hash,
@@ -272,7 +278,7 @@ export class ToolRuntime {
 
     // Short-lived, audience-restricted, minted per call, handed to the sandbox and never
     // into model context (§16.3).
-    const grant = await this.broker.mint(tx, {
+    const mintRequest = {
       orgId: args.orgId,
       runId: args.runId,
       stepId: args.stepId,
@@ -281,7 +287,21 @@ export class ToolRuntime {
       audience: binding.endpointUrl ?? binding.ref,
       scopes: [`tool:${binding.ref}`],
       tenantRef: args.tenantRef,
-    });
+    };
+    let grant;
+    try {
+      grant = binding.credentialRef
+        ? await this.broker.forTool(tx, { ...mintRequest, credentialRef: binding.credentialRef })
+        : await this.broker.mint(tx, mintRequest);
+    } catch (e) {
+      // Settled, not thrown: the attempt row above may already be committed, and a thrown error
+      // would leave a non-idempotent call `running` -- which resume reads as an indeterminate side
+      // effect, for a call that provably never left the process.
+      if (!(e instanceof PlatformError)) throw e;
+      const error = { message: e.message, retryable: false };
+      await this.settle(tx, invocationId, 'failed', null, error);
+      return { kind: 'failed', invocationId, error };
+    }
 
     // §8.1: the engine treats all origins identically -- same invocation record, same
     // durability, same authorization -- while preserving protocol metadata. The dispatch

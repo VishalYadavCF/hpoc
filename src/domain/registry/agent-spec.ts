@@ -216,6 +216,28 @@ export const agentSpecSchema = z
       })
       .default({ maxChars: 24_000, reserveForAnswer: 4_000, compaction: true, eviction: true }),
 
+    /**
+     * §3 thread continuity: what a new run on an existing thread is told about earlier turns.
+     *
+     * `none` (the default) -- nothing; the run sees only its own input, as it always has.
+     * Right for agents whose continuity lives in the workspace and checkpoints, and whose
+     * long replies would only bloat a replayed transcript.
+     * `transcript` -- the thread's last DELIVERED messages (what `GET /threads/:id/messages`
+     * returns), prepended as prior user/assistant turns, newest kept within `maxMessages`
+     * and `maxChars`, de-duplicated against memory recall, never replayed on a resume.
+     * `memory` -- an explicit label for "continuity comes from memory recall"; no transcript.
+     *
+     * Optional rather than defaulted, so a spec that does not mention it normalises -- and
+     * therefore hashes -- exactly as before; one that does is a different version (§17.1).
+     */
+    thread: z
+      .object({
+        history: z.enum(['none', 'transcript', 'memory']).default('none'),
+        maxMessages: z.number().int().positive().max(200).default(20),
+        maxChars: z.number().int().positive().max(200_000).default(8_000),
+      })
+      .optional(),
+
     // §0.5: each compensating mechanism is individually disableable per agent, and one
     // that cannot be shown to help is removed. Memory defaults OFF for that reason --
     // an agent should opt into a mechanism, not inherit it and never measure it.

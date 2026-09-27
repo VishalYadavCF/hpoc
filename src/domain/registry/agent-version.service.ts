@@ -66,6 +66,8 @@ export interface ResolvedVersion {
   peers: { alias: string; peerId: string }[];
   cache: { modelResponses: boolean; ttlSeconds: number };
   context: { maxChars: number; reserveForAnswer: number; compaction: boolean; eviction: boolean };
+  /** §3 thread continuity. `none` unless the spec opted in -- see `agentSpecSchema.thread`. */
+  thread?: { history: 'none' | 'transcript' | 'memory'; maxMessages: number; maxChars: number };
   /**
    * How the pinned policy shapes the framework's own surface (§17.3).
    *
@@ -452,6 +454,7 @@ export class AgentVersionService {
       knowledge?: { collections?: string[]; recallLimit?: number };
       cache?: { modelResponses?: boolean; ttlSeconds?: number };
       context?: { maxChars?: number; reserveForAnswer?: number; compaction?: boolean; eviction?: boolean };
+      thread?: { history?: 'none' | 'transcript' | 'memory'; maxMessages?: number; maxChars?: number };
       harness?: { systemPromptSuffix?: string | null };
       responseSchema?: Record<string, unknown> | null;
       inlineSubAgents?: InlineSubAgent[];
@@ -495,6 +498,11 @@ export class AgentVersionService {
         reserveForAnswer: spec.context?.reserveForAnswer ?? 4_000,
         compaction: spec.context?.compaction ?? true,
         eviction: spec.context?.eviction ?? true,
+      },
+      thread: {
+        history: spec.thread?.history ?? 'none',
+        maxMessages: spec.thread?.maxMessages ?? 20,
+        maxChars: spec.thread?.maxChars ?? 8_000,
       },
       harness: harnessShaping(policyDocument, spec),
       responseSchema: spec.responseSchema ?? null,

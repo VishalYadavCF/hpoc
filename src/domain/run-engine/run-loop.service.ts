@@ -39,6 +39,7 @@ import {
   type HostToolOutcome,
   type RunHost,
 } from '../ports/framework-adapter.port.js';
+import { dedupeRecalled, threadHistoryFor, type HistoryTurn } from '../thread/thread-history.js';
 
 /**
  * What a step produced, in the platform's own vocabulary.
@@ -260,7 +261,11 @@ export class RunLoop {
     // Recalled ONCE at run start, not per step. Recall is a network and index round trip;
     // doing it every step would multiply cost by step count for context that rarely
     // changes mid-run.
-    const recalled = await this.recall(run, version);
+    //
+    // Thread continuity (§3) runs BEFORE recall so recall can drop the turns the transcript
+    // already carries. Skipped on a restored run: its checkpoint already holds them.
+    const history = restored ? [] : await this.threadHistory(run, version);
+    const recalled = dedupeRecalled(await this.recall(run, version), history);
     // Same reasoning as recall: once per run, not per step. A corpus does not change
     // mid-run, so re-searching it every step buys nothing and costs an embed plus an ANN
     // query each time.
@@ -381,6 +386,7 @@ export class RunLoop {
         context: { compaction: version.context.compaction, maxChars: version.context.maxChars },
       },
       input: run.input,
+      history,
       state: restored?.adapterState ?? null,
       resume,
       signal: host.signal,
@@ -795,6 +801,20 @@ export class RunLoop {
       { level: 'namespace', scopeRef: run.namespace_id },
       { level: 'tenant', scopeRef: run.tenant_ref },
     ];
+  }
+
+  /**
+   * Earlier delivered turns of this run's thread, independent of `memory.enabled`. Degrades
+   * like recall: a failed read produces a context-less answer, not a failed run.
+   */
+  private async threadHistory(run: RunRow, version: ResolvedVersion): Promise<HistoryTurn[]> {
+    try {
+      // Opt-in per agent (`spec.thread.history`); the default leaves a run exactly as it was.
+      return await threadHistoryFor(this.db, run, version.thread);
+    } catch (e) {
+      this.log.warn(`thread history failed for run ${run.id}: ${(e as Error).message}`);
+      return [];
+    }
   }
 
   private async recall(run: RunRow, version: ResolvedVersion) {

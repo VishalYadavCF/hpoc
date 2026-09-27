@@ -436,6 +436,10 @@ CREATE TABLE tool_templates (
     -- Accept headers and API version pins. NEVER credentials: those are minted per call
     -- by the broker against the endpoint's audience (§16.3).
     static_headers    jsonb   NOT NULL DEFAULT '{}'::jsonb,
+    -- A third-party API's own credential, by NAME (migration 0033). The secret store resolves
+    -- it per call and the broker sends it INSTEAD of its platform token. NULL means the
+    -- broker's token, which is right for any first-party service.
+    credential_ref    text CHECK (credential_ref IS NULL OR credential_ref <> ''),
 
     -- A ceiling on how many tools one spec may instantiate. Without it a caller can put
     -- four hundred tools in a model's context and turn a prompt-size problem into an
@@ -510,6 +514,8 @@ CREATE TABLE tools (
     -- Accept headers and API version pins. NEVER credentials: those are minted per call
     -- by the broker (§16.3) and are not registry data.
     static_headers    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    -- Copied from the template on instantiation, like endpoint_url (migration 0033).
+    credential_ref    text CHECK (credential_ref IS NULL OR credential_ref <> ''),
     -- §8.1 `origin = 'function'`: the tool's own body, handed to the sandbox on stdin.
     -- Data rather than a baked image, for the same reason the HTTP shape above is data --
     -- a tool edit is an UPDATE, not a rebuild and a deploy. The harness in

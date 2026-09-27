@@ -80,6 +80,47 @@ export class CredentialBroker {
     return { ...resolved, ...(request.baseUrl ? { baseUrl: request.baseUrl } : {}) };
   }
 
+  /**
+   * A third-party API's OWN credential, for a tool whose template names a `credential_ref`.
+   *
+   * Sent INSTEAD of the platform token, not beside it: GitHub and its kind read exactly one
+   * `Authorization` header, and a platform JWT handed to a third party is a leak with no upside.
+   * The grant is recorded exactly as `mint` records one, so the audit trail does not care which
+   * kind of credential a call carried.
+   *
+   * The secret is a bare token (sent as `Authorization: Bearer <token>`) or a JSON object whose
+   * `header` and `scheme` override either half, for an API that wants `X-Api-Key: <token>` or
+   * `Authorization: token <token>`. A ref that resolves to nothing fails HERE, before a request
+   * is built, rather than as a 401 the model then tries to reason about.
+   */
+  async forTool(
+    tx: Tx,
+    request: MintRequest & { credentialRef: string },
+  ): Promise<MintedCredential> {
+    const resolved = await this.secrets.resolve(request.credentialRef);
+    const token = resolved?.['apiKey'] ?? resolved?.['token'];
+    if (!token) {
+      throw new PlatformError(
+        'capability_denied',
+        `No secret is configured for credential_ref "${request.credentialRef}"`,
+        { credentialRef: request.credentialRef },
+      );
+    }
+
+    const tokenId = randomBytes(16).toString('hex');
+    const expiresAt = new Date(Date.now() + (request.ttlSeconds ?? 300) * 1000);
+    const grantId = await this.record(tx, { ...request, tokenId, expiresAt });
+
+    const header = (resolved?.['header'] ?? 'authorization').toLowerCase();
+    const scheme = resolved?.['scheme'] ?? (header === 'authorization' ? 'Bearer' : '');
+    return {
+      grantId,
+      tokenId,
+      headers: { [header]: scheme ? `${scheme} ${token}` : token },
+      expiresAt,
+    };
+  }
+
   async mint(tx: Tx, request: MintRequest): Promise<MintedCredential> {
     const tokenId = randomBytes(16).toString('hex');
     const ttl = request.ttlSeconds ?? 300;

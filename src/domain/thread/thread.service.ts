@@ -3,6 +3,7 @@ import { DB } from '../../platform/persistence/tokens.js';
 import type { Db } from '../../platform/persistence/database.js';
 import { requireContext } from '../../platform/context/platform-context.js';
 import { NotFound } from '../errors/platform.errors.js';
+import { projectThreadMessages } from './thread-history.js';
 
 export interface ThreadMessage {
   role: 'user' | 'assistant';
@@ -83,22 +84,9 @@ export class ThreadService {
    * to have said it.
    */
   async messages(threadId: string): Promise<ThreadMessage[]> {
-    const runs = await this.listRuns(threadId);
-    const out: ThreadMessage[] = [];
-    for (const run of runs) {
-      if (run.input !== null) {
-        out.push({ role: 'user', content: run.input, runId: run.id, at: run.created_at });
-      }
-      if (run.status === 'completed' && run.output !== null) {
-        out.push({
-          role: 'assistant',
-          content: (run.output as { text?: unknown }).text ?? run.output,
-          runId: run.id,
-          at: run.ended_at ?? run.created_at,
-        });
-      }
-    }
-    return out;
+    // Same projection the run loop hands a new turn as history, so what a client sees as
+    // the conversation and what the agent is told it said cannot drift.
+    return projectThreadMessages(await this.listRuns(threadId));
   }
 
   async archive(id: string): Promise<void> {

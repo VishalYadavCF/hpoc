@@ -347,6 +347,15 @@ export interface RunSession {
   spec: AgentSpecView;
   input: unknown;
   /**
+   * Earlier DELIVERED turns of this run's thread, oldest first, bounded -- the same
+   * projection `GET /v1/threads/:id/messages` returns (§3: a new turn resets execution,
+   * not continuity). An adapter places these before `input` as prior user/assistant turns.
+   *
+   * Empty (or absent) on a resumed or checkpointed run: the framework's restored state
+   * already holds them, and replaying them would put every prior turn in twice.
+   */
+  history?: { role: 'user' | 'assistant'; content: string }[];
+  /**
    * Non-null when this run is being resumed after a suspension. Carries the value the
    * framework was waiting for -- an approval decision, a child run's output.
    *

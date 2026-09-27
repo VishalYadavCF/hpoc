@@ -39,7 +39,8 @@ export class EchoAdapter implements FrameworkAdapter {
     const asked = typeof session.input === 'string' ? session.input : JSON.stringify(session.input);
 
     const model = await host.callModel({
-      messages: [{ role: 'user', content: asked }],
+      // Prior thread turns (§3) first, so the model sees the conversation it is continuing.
+      messages: [...(session.history ?? []), { role: 'user', content: asked }],
       systemPrompt: spec.systemPrompt,
     });
 

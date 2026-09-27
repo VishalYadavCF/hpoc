@@ -1119,3 +1119,64 @@ describe('/workspace persists across separate runs of the same thread (§11.2)',
     expect(host.recordedArtifacts[0]!.metadata).toMatchObject({ workspacePath: '/report.md' });
   });
 });
+
+describe('thread continuity (§3): prior turns reach the model once', () => {
+  const history = [
+    { role: 'user' as const, content: 'Create a new workflow called cart_recovery_002' },
+    { role: 'assistant' as const, content: 'Created workflow 19940.' },
+  ];
+  const count = (messages: HostModelRequest['messages'], text: string) =>
+    messages.filter((m) => m.content.includes(text)).length;
+
+  it("hands a second run the first run's prompt and reply, before its own input", async () => {
+    const host = new ScriptedHost([{ text: 'Editing 19940.' }]);
+    await asTenant(() =>
+      adapter.run(session(host, { input: 'Add a prompt node before bolna', history })),
+    );
+
+    const turns = host.modelCalls[0]!.messages;
+    expect(turns.map((m) => [m.role, m.content])).toEqual([
+      ['user', history[0]!.content],
+      ['assistant', history[1]!.content],
+      ['user', 'Add a prompt node before bolna'],
+    ]);
+  });
+
+  it('is unchanged without prior turns', async () => {
+    const host = new ScriptedHost([{ text: 'ok' }]);
+    await asTenant(() => adapter.run(session(host, { history: [] })));
+    expect(host.modelCalls[0]!.messages.map((m) => m.role)).toEqual(['user']);
+  });
+
+  it('does not inject the history again on a resume', async () => {
+    const gated = spec({ tools: [{ ref: 'demo.pay', description: 'Send money', inputSchema: { type: 'object' } }] });
+    const runId = `da-hist-resume-${Math.random().toString(36).slice(2, 8)}`;
+    threads.push(runId);
+
+    const first = new ScriptedHost(
+      [{ text: '', toolCalls: [{ name: 'demo.pay', args: { amount: 1 } }] }],
+      () => ({ kind: 'suspended', reason: 'approval', ref: 'demo.pay' }),
+    );
+    await asTenant(() => adapter.run(session(first, { runId, spec: gated, history })));
+
+    const second = new ScriptedHost([{ text: 'Paid.' }]);
+    await asTenant(() =>
+      adapter.run(session(second, {
+        runId, spec: gated, history,
+        resume: { value: 'receipt-1', ref: 'demo.pay', failed: false },
+      })),
+    );
+    expect(count(second.modelCalls[0]!.messages, history[0]!.content)).toBe(1);
+    expect(count(second.modelCalls[0]!.messages, history[1]!.content)).toBe(1);
+  });
+
+  it('does not inject the history again when a crashed run is re-driven from its graph state', async () => {
+    const runId = `da-hist-redrive-${Math.random().toString(36).slice(2, 8)}`;
+    threads.push(runId);
+    await asTenant(() => adapter.run(session(new ScriptedHost([{ text: 'first' }]), { runId, history })));
+
+    const again = new ScriptedHost([{ text: 'second' }]);
+    await asTenant(() => adapter.run(session(again, { runId, history })));
+    expect(count(again.modelCalls[0]!.messages, history[0]!.content)).toBe(1);
+  });
+});

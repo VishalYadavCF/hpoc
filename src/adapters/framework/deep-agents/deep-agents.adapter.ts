@@ -14,7 +14,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { ToolStrategy, createMiddleware } from 'langchain';
 import { Command, interrupt } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph';
-import { HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type {
   FrameworkAdapter,
@@ -284,9 +284,18 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
     try {
       // RESUME, NOT REPLAY. `Command` re-enters the graph at the interrupt that suspended
       // it, so the approved tool call finishes and nothing before it runs twice.
+      //
+      // Prior thread turns (§3) go in front of the input only on a FIRST drive. Any graph
+      // state already saved under this run -- a resume, or a re-drive after a crash --
+      // holds them from the first drive, and prepending again would double every turn.
       const input = session.resume
         ? new Command({ resume: session.resume.value })
-        : { messages: [new HumanMessage(renderInput(session))] };
+        : {
+            messages: [
+              ...(await this.priorTurns(session, config)),
+              new HumanMessage(renderInput(session)),
+            ],
+          };
 
       const result = (await agent.invoke(input, config)) as {
         messages?: BaseMessage[];
@@ -321,6 +330,18 @@ export class DeepAgentsAdapter implements FrameworkAdapter {
       this.log.warn(`run ${session.runId} failed inside the graph: ${(e as Error).message}`);
       return { type: 'fail', message: (e as Error).message };
     }
+  }
+
+  private async priorTurns(
+    session: RunSession,
+    config: { configurable: { thread_id: string } },
+  ): Promise<BaseMessage[]> {
+    const history = session.history ?? [];
+    if (history.length === 0) return [];
+    if (await this.checkpointer.getTuple({ configurable: config.configurable })) return [];
+    return history.map((t) =>
+      t.role === 'user' ? new HumanMessage(t.content) : new AIMessage(t.content),
+    );
   }
 
   /**
