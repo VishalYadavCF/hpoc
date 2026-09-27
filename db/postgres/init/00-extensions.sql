@@ -1,15 +1,13 @@
 -- =====================================================================
 -- Extension bootstrap. Runs once, on first initialisation of the volume.
 --
--- Extensions are created HERE and not by Prisma. Prisma's
--- `postgresqlExtensions` preview feature would put CREATE/DROP EXTENSION
--- into migrations, and two of these do not tolerate that:
+-- Extensions are created HERE and not in db/migrations/, because two of
+-- them do not tolerate being created by a migration:
 --   * timescaledb must be created before the objects that use it and
 --     dislikes sharing a transaction with unrelated DDL,
 --   * pg_cron can only be created in the database named by
 --     cron.database_name.
--- Prisma therefore does not manage extensions at all; it only consumes
--- the types they provide (notably `vector`).
+-- Migrations only consume the types they provide (notably `vector`).
 -- =====================================================================
 
 \set ON_ERROR_STOP on
@@ -70,8 +68,8 @@ BEGIN
     END LOOP;
 END $$;
 
--- Prisma's shadow database (used by `migrate dev` to detect drift) is
--- created fresh each time and needs the same types available.
+-- Scratch databases (db/reference.sh's hpoc_reference, test databases) are
+-- created fresh and need the same types available.
 -- Templating them into template1 means every future createdb inherits them.
 \c template1
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

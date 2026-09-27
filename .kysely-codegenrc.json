@@ -1,0 +1,28 @@
+{
+  "dialect": "postgres",
+  "url": "env(DATABASE_URL)",
+  "outFile": "src/platform/persistence/schema.generated.ts",
+  "includePattern": "public.*",
+  "excludePattern": "public.{pg_*,hypopg_*}",
+  "typeMapping": {
+    "json": "ColumnType<unknown, string, string>",
+    "jsonb": "ColumnType<unknown, string, string>"
+  },
+  "overrides": {
+    "columns": {
+      "budgets.period": "\"hour\" | \"day\" | \"month\" | \"total\"",
+      "deployments.state": "Generated<\"active\" | \"rolling\" | \"rolled_back\" | \"retired\">",
+      "eval_cases.grader": "Generated<\"exact\" | \"contains\" | \"not_contains\" | \"regex\" | \"json_path\" | \"budget\" | \"llm_judge\">",
+      "eval_runs.verdict": "\"passed\" | \"failed\" | \"mechanism_justified\" | \"mechanism_not_justified\" | \"inconclusive\" | null",
+      "eval_suites.mechanism_under_test": "\"summarization\" | \"compaction\" | \"memory_tiers\" | \"planning_scaffold\" | \"sub_agents\" | \"retrieval\" | \"eviction\" | \"skills\" | \"knowledge\" | \"model_cache\" | \"peers\" | \"none\" | null",
+      "peer_tasks.binding": "\"local\" | \"remote\"",
+      "peer_tasks.state": "Generated<\"submitted\" | \"working\" | \"input_required\" | \"completed\" | \"failed\" | \"cancelled\">",
+      "peers.failure_mode": "Generated<\"contain\" | \"propagate\">",
+      "peers.inbound_trust": "Generated<\"self\" | \"delegated_identity\">",
+      "peers.reply_mode": "Generated<\"task\" | \"message\">",
+      "tools.arg_placement": "\"query\" | \"body\" | \"none\" | null",
+      "tools.code_runtime": "\"node\" | \"python\" | null",
+      "tools.http_method": "Generated<\"GET\" | \"POST\" | \"PUT\" | \"PATCH\" | \"DELETE\">"
+    }
+  }
+}

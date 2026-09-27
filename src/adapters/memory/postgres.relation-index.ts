@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { sql } from 'kysely';
 import { DB } from '../../platform/persistence/tokens.js';
 import type { Db, Tx } from '../../platform/persistence/database.js';
+import type { LineageNodeKind } from '../../platform/persistence/schema.generated.js';
 import type { RelationEdge, RelationIndex } from '../../domain/ports/memory.port.js';
 
 /**
@@ -26,9 +27,11 @@ export class PostgresRelationIndex implements RelationIndex {
       .values({
         org_id: edge.orgId,
         tenant_ref: edge.tenantRef,
-        derived_kind: edge.fromKind,
+        // The port speaks plain strings so a graph store can replace this adapter;
+        // the lineage_node_kind enum rejects an unknown kind at insert.
+        derived_kind: edge.fromKind as LineageNodeKind,
         derived_id: edge.fromId,
-        source_kind: edge.toKind,
+        source_kind: edge.toKind as LineageNodeKind,
         source_id: edge.toId,
         relation: edge.relation,
         run_id: edge.runId ?? null,

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// Verifies that the database Prisma migrated actually enforces what the design
-// requires. Counting catalog rows is not enough: the three things Prisma cannot
-// express are reapplied by prisma/patch-baseline.mjs, and a regeneration that
-// silently dropped them would still produce a database with all 54 tables.
+// Verifies that the migrated database actually enforces what the design requires.
+// Counting catalog rows is not enough: a database missing its CHECK constraints,
+// partitioning or hnsw index would still have all 54 tables.
 //
 // Everything runs inside a transaction that is rolled back, so it is safe
 // against a database with data in it.
@@ -66,7 +65,6 @@ try {
     SELECT count(*)::int AS v FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r','p')
-      AND c.relname <> '_prisma_migrations'
       AND c.oid NOT IN (SELECT objid FROM pg_depend WHERE deptype = 'e')`);
   record('54 application tables', tables === 54, `found ${tables}`);
 
