@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Test, type TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import { match } from 'path-to-regexp';
 import { ApiModule } from '../src/api/api.module.js';
 import { WorkerModule } from '../src/worker/worker.module.js';
 import { SchedulerModule } from '../src/scheduler/scheduler.module.js';
@@ -52,5 +54,28 @@ describe('process module graphs', () => {
       })();
       expect(held, engine.name).toBe(expected);
     }
+  });
+
+  // Express answers with the FIRST registered route that matches, and controllers now
+  // register module by module. A route shadowed by an earlier, wider one (`/v1/memory/:id`
+  // swallowing `/v1/memory/sharing`) still appears in the router and in the OpenAPI
+  // document -- it just never runs. So: every route must be the first match for its own path.
+  it('no route is shadowed by one registered before it', async () => {
+    moduleRef = await Test.createTestingModule({ imports: [ApiModule] }).compile();
+    const app: INestApplication = moduleRef.createNestApplication({ logger: false });
+    await app.init();
+    type Layer = { route?: { path: string; methods: Record<string, boolean> } };
+    const stack = (app.getHttpAdapter().getInstance() as { router: { stack: Layer[] } }).router.stack;
+    const routes = stack.flatMap((l) =>
+      l.route ? Object.keys(l.route.methods).map((m) => ({ method: m, path: l.route!.path })) : []);
+    expect(routes.length).toBeGreaterThan(100);
+
+    const shadowed = routes.flatMap((r) => {
+      const sample = r.path.replace(/[:*](\w+)/g, 'sample-$1');
+      const first = routes.find((c) => c.method === r.method && match(c.path)(sample));
+      return first === r ? [] : [`${r.method.toUpperCase()} ${r.path} is answered by ${first?.path}`];
+    });
+    expect(shadowed).toEqual([]);
+    await app.close();
   });
 });
