@@ -15,7 +15,7 @@ import { ArtifactService } from '../domain/artifact/artifact.service.js';
 import { Metrics } from '../platform/observability/metrics.js';
 import { EventLog } from '../domain/event-log/event-log.service.js';
 import { EventType } from '../domain/event-log/taxonomy.js';
-import { RunLoop } from '../domain/run-engine/run-loop.service.js';
+import { ParentWaker } from '../domain/run-engine/parent-waker.service.js';
 import { SpanProjectionService } from '../domain/observability/span-projection.service.js';
 
 interface DeadLetteredRun {
@@ -59,7 +59,7 @@ export class SchedulerService implements OnApplicationBootstrap, OnApplicationSh
     private readonly memory: MemoryEngine,
     private readonly artifacts: ArtifactService,
     private readonly events: EventLog,
-    private readonly runLoop: RunLoop,
+    private readonly parents: ParentWaker,
     private readonly spans: SpanProjectionService,
     private readonly metrics: Metrics,
   ) {}
@@ -243,7 +243,7 @@ export class SchedulerService implements OnApplicationBootstrap, OnApplicationSh
         await this.events.notify(this.db, run.id, seq).catch((e: Error) =>
           this.log.warn(`could not notify dead-lettered run ${run.id}: ${e.message}`),
         );
-        await this.runLoop.wakeParent(run);
+        await this.parents.wakeParent(run);
       }),
     );
     return terminal.length;

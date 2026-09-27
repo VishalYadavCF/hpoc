@@ -57,6 +57,7 @@ describe('model_call steps (§15.1)', () => {
     const loop = new RunLoop(
       f.db, unused, [], new UnitOfWork(f.db), unused, new EventLog(), unused, unused, gateway,
       unused, unused, unused, unused, unused, unused, unused, unused, metrics as never, unused,
+      unused,
     );
 
     const run = await f.db.selectFrom('runs').selectAll().where('id', '=', runId).executeTakeFirstOrThrow();
