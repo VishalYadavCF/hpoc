@@ -3,69 +3,35 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '../platform/config/config.module.js';
 import { PersistenceModule } from '../platform/persistence/persistence.module.js';
 import { ObservabilityModule } from '../platform/observability/observability.module.js';
-import { DomainModule } from '../domain/domain.module.js';
-import { RunsController } from './execution/runs.controller.js';
-import { ThreadsController } from './execution/threads.controller.js';
-import { InteractionsController } from './execution/interactions.controller.js';
-import { TriggersController } from './execution/triggers.controller.js';
-import { AgentsController } from './control-plane/agents.controller.js';
-import { MemoryController } from './execution/memory.controller.js';
-import { ObservabilityController } from './observability/observability.controller.js';
-import { ReplayController } from './observability/replay.controller.js';
-import { ArtifactsController } from './execution/artifacts.controller.js';
-import { McpController } from './control-plane/mcp.controller.js';
-import { MemorySharingController } from './control-plane/memory-sharing.controller.js';
-import { SkillsController } from './control-plane/skills.controller.js';
-import { KnowledgeController } from './control-plane/knowledge.controller.js';
-import { PeersController } from './control-plane/peers.controller.js';
-import { PromptsController } from './control-plane/prompts.controller.js';
-import { PoliciesController } from './control-plane/policies.controller.js';
-import { CatalogController } from './control-plane/catalog.controller.js';
-import { A2aController } from './a2a/a2a.controller.js';
-import { EvalsController } from './evals/evals.controller.js';
-import { DeploymentsController } from './evals/deployments.controller.js';
-import { UiController } from './ui/ui.controller.js';
-import { OpsController } from './ops/ops.controller.js';
-import { RunStreamService } from './streaming/run-stream.service.js';
+import { GovernanceModule } from '../bootstrap/modules/governance.module.js';
+import { ExecutionHttpModule } from './execution/execution-http.module.js';
+import { ControlPlaneHttpModule } from './control-plane/control-plane-http.module.js';
+import { ObservabilityHttpModule } from './observability/observability-http.module.js';
+import { EvalsHttpModule } from './evals/evals-http.module.js';
+import { A2aHttpModule } from './a2a/a2a-http.module.js';
+import { OpsHttpModule } from './ops/ops-http.module.js';
 import { ContextMiddleware } from './middleware/context.middleware.js';
 import { OpsBypassMiddleware } from './middleware/ops-bypass.middleware.js';
 import { PlatformExceptionFilter } from './filters/platform-exception.filter.js';
 import { TimingInterceptor } from './interceptors/timing.interceptor.js';
 import { IdempotencyInterceptor } from './interceptors/idempotency.interceptor.js';
 import { BackpressureInterceptor } from './interceptors/backpressure.interceptor.js';
-import { GatewayWiring } from '../bootstrap/gateway-wiring.js';
 
 @Module({
   imports: [
     ConfigModule.forRole('api'),
     PersistenceModule,
     ObservabilityModule,
-    DomainModule,
-  ],
-  controllers: [
-    RunsController, ThreadsController, InteractionsController,
-    // MemorySharingController BEFORE MemoryController: Express matches in registration
-    // order, so `@Get(':id')` on /v1/memory would otherwise swallow /v1/memory/sharing
-    // and answer 404 for a route that exists.
-    MemorySharingController, MemoryController,
-    AgentsController, TriggersController,
-    ObservabilityController, ReplayController, ArtifactsController, McpController,
-    SkillsController, KnowledgeController, PeersController, PromptsController,
-    PoliciesController,
-    CatalogController,
-    EvalsController,
-    // Shares the /v1/agents prefix with AgentsController but collides with none of its
-    // routes: every route here is /:name/<literal>, and AgentsController's widest pattern
-    // is a single-segment `@Get(':name')`. Order is therefore not load-bearing -- unlike
-    // MemorySharingController above, where it is.
-    DeploymentsController,
-    // Outside /v1 and outside the tenant middleware: a peer authenticates as a peer.
-    A2aController,
-    UiController, OpsController,
+    // For the backpressure interceptor, registered globally below.
+    GovernanceModule,
+    ExecutionHttpModule,
+    ControlPlaneHttpModule,
+    ObservabilityHttpModule,
+    EvalsHttpModule,
+    A2aHttpModule,
+    OpsHttpModule,
   ],
   providers: [
-    RunStreamService,
-    GatewayWiring,
     // Order matters: timing wraps everything so a shed request is still measured;
     // backpressure runs before idempotency so a saturated system does not spend a cache
     // slot per rejected call.

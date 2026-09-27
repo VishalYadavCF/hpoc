@@ -11,11 +11,11 @@ module.exports = {
     {
       name: 'domain-not-depend-on-adapters',
       comment:
-        'Domain code may depend on a PORT, never on an adapter. The one exception is ' +
-        'domain.module.ts, which imports AdaptersModule to bind the port tokens -- that ' +
-        'is composition, not a dependency on any adapter class.',
+        'Domain code may depend on a PORT, never on an adapter. Nest modules that bind ' +
+        'ports to adapters live in src/bootstrap/modules, outside the domain band, so ' +
+        'there is no exception to this rule.',
       severity: 'error',
-      from: { path: '^src/domain', pathNot: '^src/domain/domain\\.module\\.ts$' },
+      from: { path: '^src/domain' },
       to: { path: '^src/adapters' },
     },
     {
@@ -23,7 +23,7 @@ module.exports = {
       comment: 'The dependency direction is one-way downward (lld.md §2).',
       severity: 'error',
       from: { path: '^src/domain' },
-      to: { path: '^src/(api|worker|scheduler)' },
+      to: { path: '^src/(api|worker|scheduler|bootstrap)' },
     },
     {
       name: 'domain-free-of-framework-and-protocol-sdks',
@@ -38,7 +38,7 @@ module.exports = {
       name: 'platform-depends-on-nothing-above-it',
       severity: 'error',
       from: { path: '^src/platform' },
-      to: { path: '^src/(domain|adapters|api|worker|scheduler)' },
+      to: { path: '^src/(domain|adapters|api|worker|scheduler|bootstrap)' },
     },
     {
       name: 'adapters-do-not-import-each-other',

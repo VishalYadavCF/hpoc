@@ -64,7 +64,7 @@ export interface MemoryFilter {
 
 // ---------------------------------------------------------------------------
 // The five seams. Each is one interface plus one token; an adapter is one class
-// and one line in adapters.module.ts.
+// and one line in memory-adapters.module.ts.
 // ---------------------------------------------------------------------------
 
 /**

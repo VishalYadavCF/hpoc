@@ -11,7 +11,7 @@ import type { ObjectStore, StoredObject } from '../../domain/ports/object-store.
  * Filesystem object store.
  *
  * Correct for single-node development and for a deployment with a shared volume; an S3
- * adapter is one class implementing the same port and one line in `adapters.module.ts`.
+ * adapter is one class implementing the same port and one line in `storage-adapters.module.ts`.
  * Deliberately not shipped untested -- an S3 adapter written without an S3 to run it
  * against is worse than none, because it looks finished.
  */

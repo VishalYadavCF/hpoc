@@ -61,7 +61,8 @@ The end-to-end tests need the api and worker running.
 |---|---|
 | `src/platform/` | Config, persistence, request context, metrics. Depends on nothing above it |
 | `src/domain/` | Run engine, queue, event log, checkpoints, tool runtime, model gateway, admission. Depends on ports, never on adapters |
-| `src/adapters/` | Framework adapters, model providers, sandbox. Bound to port tokens in `adapters.module.ts` |
+| `src/adapters/` | Framework adapters, model providers, sandbox. Bound to port tokens in one `*-adapters.module.ts` per area |
+| `src/bootstrap/` | Composition root: the Nest feature modules (`modules/`) that wire domain services to adapters |
 | `src/api/` | Controllers, SSE, context middleware, error filter |
 | `src/worker/` `src/scheduler/` | The two non-HTTP processes |
 | `db/migrations/` | The schema, as executable history. `db/schema.sql` is the readable whole |
@@ -107,6 +108,7 @@ once, and an ungranted capability is refused rather than quietly filtered out.
 
 ```
 platform  ←  domain  ←  adapters
+                     ←  bootstrap   (Nest modules: bind domain services to adapters)
                      ←  api / worker / scheduler
 ```
 
@@ -119,7 +121,7 @@ have been checked against a deliberate violation rather than assumed to work.
 
 ## Model providers
 
-Four adapters, registered in `src/adapters/adapters.module.ts`:
+Four adapters, registered in `src/adapters/model-provider-adapters.module.ts`:
 
 | Provider id | Covers | Wire shape |
 |---|---|---|

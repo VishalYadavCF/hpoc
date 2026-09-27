@@ -31,6 +31,7 @@ import { AgentService } from '../agent/agent.service.js';
 import type { MemoryTier } from '../ports/memory.port.js';
 import { IndeterminateSideEffect, LeaseLost } from '../errors/platform.errors.js';
 import { BudgetService, type BudgetScope } from '../governance/budget.service.js';
+import { ParentWaker } from './parent-waker.service.js';
 import {
   FRAMEWORK_ADAPTER,
   type FrameworkAdapter,
@@ -171,6 +172,7 @@ export class RunLoop {
     @Inject(PEER_TRANSPORT) private readonly peers: PeerTransport,
     private readonly metrics: Metrics,
     private readonly budgets: BudgetService,
+    private readonly parents: ParentWaker,
   ) {
     this.adapters = new Map(adapters.map((a) => [a.id, a]));
     metrics.describe('model_call_duration_ms', 'Model call latency by provider');
@@ -2003,7 +2005,7 @@ export class RunLoop {
       return s;
     });
     await this.events.notify(this.db, run.id, seq);
-    await this.wakeParent(run);
+    await this.parents.wakeParent(run);
     // After the terminal transaction: memory is not part of the run's durability
     // contract, and a memory write must never roll back a completed run.
     await this.remember(run, version, output);
@@ -2048,7 +2050,7 @@ export class RunLoop {
         return s;
       });
       await this.events.notify(this.db, run.id, seq);
-      await this.wakeParent(run);
+      await this.parents.wakeParent(run);
       this.metrics.increment('runs_failed_total');
     } catch (e) {
       if (e instanceof LeaseLost) return;
@@ -2074,35 +2076,6 @@ export class RunLoop {
       idempotencyKey: `run:${run.id}:${status}`,
       payload: { runId: run.id, threadId: run.thread_id, status, ...body },
     });
-  }
-
-  /**
-   * Returns a suspended parent to the queue once its child settles.
-   *
-   * Without this the parent waits for its own resume to be triggered by something else --
-   * which for a delegation is nothing. §4.6 requires a resumed parent to reconcile
-   * children that finished while it was down; this is the live half of the same rule.
-   */
-  async wakeParent(run: Pick<RunRow, 'id' | 'parent_run_id'>): Promise<void> {
-    if (!run.parent_run_id) return;
-    try {
-      const parentId = run.parent_run_id;
-      await this.uow.run(async (tx) => {
-        const woken = await tx
-          .updateTable('runs')
-          .set({ status: 'queued' })
-          .where('id', '=', parentId)
-          .where('status', '=', 'waiting')
-          .returning('id')
-          .executeTakeFirst();
-        // Only enqueue if this update actually moved it: two children settling at once
-        // must not enqueue the parent twice.
-        if (woken) await this.queue.enqueue(tx, parentId, { priority: 50 });
-      });
-      await this.queue.notifyReady(this.db, parentId);
-    } catch (e) {
-      this.log.error(`could not wake parent of ${run.id}: ${(e as Error).message}`);
-    }
   }
 
   private envelope(run: RunRow, version: ResolvedVersion) {
