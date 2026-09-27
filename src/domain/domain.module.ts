@@ -3,10 +3,6 @@ import { AdmissionService } from './admission/admission.service.js';
 import { AgentVersionService } from './registry/agent-version.service.js';
 import { CatalogService } from './registry/catalog.service.js';
 import { RunService } from './run-engine/run.service.js';
-import { RunLoop } from './run-engine/run-loop.service.js';
-import { ModelGateway } from './model-gateway/model-gateway.service.js';
-import { ToolRuntime } from './tool-runtime/tool-runtime.service.js';
-import { CredentialBroker } from './identity/credential-broker.service.js';
 import { InteractionService } from './interaction/interaction.service.js';
 import { ThreadService } from './thread/thread.service.js';
 import { AgentService } from './agent/agent.service.js';
@@ -50,10 +46,6 @@ import { RunStateModule } from './run-state.module.js';
     AgentVersionService,
     CatalogService,
     RunService,
-    RunLoop,
-    ModelGateway,
-    ToolRuntime,
-    CredentialBroker,
     InteractionService,
     ThreadService,
     AgentService,
@@ -92,7 +84,7 @@ import { RunStateModule } from './run-state.module.js';
     AdaptersModule,
     RunStateModule,
     AdmissionService, AgentVersionService, CatalogService,
-    RunService, RunLoop, ModelGateway, ToolRuntime, CredentialBroker,
+    RunService,
     InteractionService, ThreadService, AgentService, TriggerService,
     MemoryEngine,
     TraceService,

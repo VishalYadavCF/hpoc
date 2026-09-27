@@ -33,7 +33,6 @@ import { PlatformExceptionFilter } from './filters/platform-exception.filter.js'
 import { TimingInterceptor } from './interceptors/timing.interceptor.js';
 import { IdempotencyInterceptor } from './interceptors/idempotency.interceptor.js';
 import { BackpressureInterceptor } from './interceptors/backpressure.interceptor.js';
-import { GatewayWiring } from '../bootstrap/gateway-wiring.js';
 
 @Module({
   imports: [
@@ -65,7 +64,6 @@ import { GatewayWiring } from '../bootstrap/gateway-wiring.js';
   ],
   providers: [
     RunStreamService,
-    GatewayWiring,
     // Order matters: timing wraps everything so a shed request is still measured;
     // backpressure runs before idempotency so a saturated system does not spend a cache
     // slot per rejected call.

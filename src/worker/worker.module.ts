@@ -3,8 +3,8 @@ import { ConfigModule } from '../platform/config/config.module.js';
 import { PersistenceModule } from '../platform/persistence/persistence.module.js';
 import { ObservabilityModule } from '../platform/observability/observability.module.js';
 import { DomainModule } from '../domain/domain.module.js';
+import { ExecutionModule } from '../bootstrap/execution.module.js';
 import { WorkerService } from './worker.service.js';
-import { GatewayWiring } from '../bootstrap/gateway-wiring.js';
 
 @Module({
   imports: [
@@ -12,7 +12,8 @@ import { GatewayWiring } from '../bootstrap/gateway-wiring.js';
     PersistenceModule,
     ObservabilityModule,
     DomainModule,
+    ExecutionModule,
   ],
-  providers: [WorkerService, GatewayWiring],
+  providers: [WorkerService],
 })
 export class WorkerModule {}
