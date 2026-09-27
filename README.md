@@ -50,8 +50,9 @@ curl $H -N localhost:3000/v1/runs/$RUN/events          # SSE; add -H 'last-event
 curl localhost:3000/v1/ops/subsystems                  # queue depth, run states, dead letters
 ```
 
-`npm run verify` runs the whole gate: lint, build, core-only build, layering rules, tests.
-The end-to-end tests need the api and worker running.
+`npm run verify` runs the whole gate: lint, build, core-only build, layering rules, schema
+drift, generated-types check, tests. The drift and types checks need migrated Postgres; the
+end-to-end tests need the api and worker running.
 
 ---
 
@@ -67,6 +68,24 @@ The end-to-end tests need the api and worker running.
 | `src/worker/` `src/scheduler/` | The two non-HTTP processes |
 | `db/migrations/` | The schema, as executable history. `db/schema.sql` is the readable whole |
 | `ai-docs/` | Requirements, API surface, client integrations, LLD |
+
+### Changing the schema
+
+Data access is [Kysely](https://kysely.dev) over `pg`; there is no ORM. The SQL in
+`db/migrations/` is the source of truth, and the query types are generated from a database
+it has been applied to.
+
+```bash
+# 1. add db/migrations/00NN_<name>.sql (applied files are immutable: add, never edit)
+npm run build && npm run db:migrate
+npm run db:types               # regenerates src/platform/persistence/schema.generated.ts
+# 2. mirror the change in db/schema.sql; `npm run db:drift` fails until they agree
+```
+
+Never edit `schema.generated.ts`. JSON columns typed as text on insert, and `text` columns
+narrowed to the values their CHECK allows, are set in `.kysely-codegenrc.json`; a new
+CHECK-constrained column belongs there too. `src/platform/persistence/schema.types.ts`
+re-exports the names the code imports.
 
 ### Three processes, not one
 
@@ -187,17 +206,9 @@ A `residency = 'external'` model that names no `base_url` and `credential_ref` i
 by a CHECK constraint, and a missing secret fails before a request is built rather than as
 a 401 mid-run.
 
-## Two things to decide
+## One thing to decide
 
-**1. Prisma and Kysely both exist.** The runtime uses **Kysely** — the schema leans on
-partitioned tables, native enums, composite foreign keys and CHECK constraints that carry
-business rules, and an entity-mapping ORM fights all of them. `prisma/schema.prisma` and
-`src/generated/prisma` are left in place as a modelling artifact from earlier work; they
-are excluded from the build and from the layering check, and nothing at runtime imports
-them. Either keep Prisma as documentation or delete it, but do not let both claim to be
-the source of truth. `db/migrations/` is authoritative today.
-
-**2. The sandbox is an HTTP egress boundary, not isolation.** `HttpEgressSandbox` bounds
+**The sandbox is an HTTP egress boundary, not isolation.** `HttpEgressSandbox` bounds
 what a tool can do — one outbound call, declared endpoint, deadline, broker-minted headers
 — but it does not isolate the process. That is honest while every tool is an HTTP call to
 a first-party service. It is not sufficient the moment agent-authored code executes. The

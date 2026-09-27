@@ -43,8 +43,6 @@ lerna-debug.log*
 # Temp
 *.tsbuildinfo
 
-# prisma generated client
-/src/generated
 /ai-docs/
 
 # FilesystemObjectStore's default ARTIFACT_ROOT (§11.2) -- runtime-written bytes, not source

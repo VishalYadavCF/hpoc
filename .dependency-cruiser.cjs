@@ -54,9 +54,6 @@ module.exports = {
     doNotFollow: { path: 'node_modules' },
     tsConfig: { fileName: 'tsconfig.json' },
     tsPreCompilationDeps: true,
-    // src/generated holds the Prisma client, which is generated output rather than
-    // source. The runtime uses Kysely; see README for why both exist and which is
-    // authoritative.
-    exclude: { path: '\\.spec\\.ts$|^src/generated/' },
+    exclude: { path: '\\.spec\\.ts$' },
   },
 };

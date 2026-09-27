@@ -32,7 +32,6 @@
     "node_modules",
     "dist",
     "test",
-    "**/*.spec.ts",
-    "src/generated/**"
+    "**/*.spec.ts"
   ]
 }

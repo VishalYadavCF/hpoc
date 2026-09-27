@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Builds hpoc_reference: a database with db/schema.sql applied, untouched by
-# Prisma. Two things use it, both documented in prisma/README.md:
-#
-#   * prisma/patch-baseline.mjs reads the CHECK constraints out of it
-#   * a regenerated baseline is diffed against it to prove nothing was lost
+# Builds hpoc_reference: a scratch database with db/schema.sql applied.
+# db/drift-check.mjs diffs the migrated database against it, so schema.sql
+# cannot silently drift from db/migrations/.
 #
 # It is scratch. Dropping it costs nothing; this script rebuilds it.
 set -euo pipefail

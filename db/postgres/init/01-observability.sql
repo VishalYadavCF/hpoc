@@ -6,7 +6,7 @@
 -- =====================================================================
 
 CREATE SCHEMA IF NOT EXISTS obs;
-COMMENT ON SCHEMA obs IS 'Observability helper views. Not part of the application schema; Prisma ignores it.';
+COMMENT ON SCHEMA obs IS 'Observability helper views. Not part of the application schema.';
 
 -- Slowest statements by total time. The usual first stop.
 CREATE OR REPLACE VIEW obs.slow_queries AS

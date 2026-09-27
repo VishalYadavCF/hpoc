@@ -13,7 +13,6 @@
     "src/worker/**/*",
     "src/scheduler/**/*",
     "src/bootstrap/**/*",
-    "**/*.spec.ts",
-    "src/generated/**"
+    "**/*.spec.ts"
   ]
 }
