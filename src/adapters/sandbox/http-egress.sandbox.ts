@@ -98,8 +98,11 @@ export class HttpEgressSandbox implements Sandbox {
           instanceId,
           ok: false,
           // 5xx and 429 are worth another attempt; 4xx is the caller's mistake and is not.
+          // The upstream's own reason, truncated. A bare status gives the model nothing to correct:
+          // GitHub's 422 "line must be part of the diff" is fixable, "returned 422" is not.
           error: {
-            message: `Tool endpoint returned ${response.status}`,
+            message: `Tool endpoint returned ${response.status}` +
+              (text ? `: ${text.slice(0, ERROR_BODY_MAX_CHARS)}` : ''),
             retryable: response.status >= 500 || response.status === 429,
           },
         };
@@ -121,6 +124,8 @@ export class HttpEgressSandbox implements Sandbox {
     }
   }
 }
+
+const ERROR_BODY_MAX_CHARS = 1_000;
 
 const safeJson = (text: string): unknown => {
   try {
