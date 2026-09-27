@@ -215,19 +215,48 @@ a first-party service. It is not sufficient the moment agent-authored code execu
 seam is `tools.sandbox_profile`, so moving to a container or microVM runtime is a registry
 change plus one provider. See `ai-docs/client-interactions/03-coding-agent.md`.
 
+## MCP and A2A
+
+**MCP servers are tools, behind a registry.** `/v1/mcp/servers` registers a server,
+discovers its tools, and approves them; the worker calls them over stdio or Streamable
+HTTP through the official client (`src/adapters/protocol/mcp/`). `McpRegistryService`
+enforces three rules rather than documenting them: a tool definition is pinned by content
+hash, so a server that changes after review fails closed until it is re-approved; approval
+is per tenant; and no credential is passed through, since the broker mints headers per
+call.
+
+**A2A works in both directions.**
+
+- *Inbound* (`src/api/a2a/`): agent cards at `/.well-known/agent-card.json` and
+  `/a2a/v1/agents/:name/card`, JSON-RPC at `POST /a2a/v1[/agents/:name]` (`message/send`,
+  `tasks/get`, `tasks/cancel`, `tasks/pushNotificationConfig/set`, `tasks/resubscribe`),
+  and SSE at `/a2a/v1/tasks/:taskId/stream`. A task is a run, and its stream is the run's
+  event log. The caller names a peer we registered in `x-a2a-peer`, and that peer's
+  `inbound_trust` decides whether its claims about tenancy are believed.
+- *Outbound* (`/v1/peers`): an agent calls a registered peer by name, and the registry
+  picks the binding. `local` starts a child run in the same event log with no HTTP hop;
+  `remote` is JSON-RPC over HTTPS. A remote peer's card is verified against a key held
+  here, and a local peer's card is generated from its agent's spec and never lists model,
+  tools or prompt.
+
+`test/mcp*.spec.ts`, `test/a2a.spec.ts` and `test/delegation.spec.ts` cover both.
+
 ## What it can serve
 
 Five of §1.1's seven workload classes: autonomous tool-using agents, conversational
 agents, background and multi-step workflows, human-in-the-loop, and long-running stateful
-runs. **Not** coding agents (needs artifacts and real sandbox isolation) and **not** voice.
+runs. **Not** coding agents (needs real sandbox isolation, see above) and **not** voice.
 
 `ai-docs/STATUS.md` has the full picture per class and per consumer, with what is missing
 for each.
 
 ## Not built yet
 
-Memory tiers and the context engine (Phase 2 — pgvector is installed but unused),
-artifacts, the caching layer, MCP and A2A adapters, voice, and eval-gated deployment.
+- **Voice.** `speech_providers` and `agent_version_speech` exist in the schema, but nothing
+  in `src/` reads them.
+- **Sandbox isolation** for agent-authored code (see "One thing to decide").
+- **A shared response cache.** The model response cache is per process
+  (`src/adapters/cache/`), so each worker has its own hit rate.
 
 ## API reference
 
