@@ -19,9 +19,10 @@ import type { RunHost } from '../../../domain/ports/framework-adapter.port.js';
  *
  * ## Why this goes through `RunHost.recordArtifact` rather than `ArtifactService` directly
  *
- * `ArtifactService` lives in `DomainModule`, which imports `AdaptersModule` for its port
- * bindings -- this class lives in the adapters band, so depending on `ArtifactService`
- * directly would be a circular module dependency, not merely an ugly one. `RunHost` is
+ * `ArtifactService` lives in `ArtifactsModule`, which imports the adapter modules for its
+ * port bindings -- this class lives in the adapters band, so depending on `ArtifactService`
+ * directly would point the dependency upward and close a cycle through the object-store
+ * binding both sides share, not merely be an ugly one. `RunHost` is
  * already the narrow, domain-owned surface a framework adapter is allowed to call into (see
  * `saveState` for the existing example); `recordArtifact` is one more door on the same
  * surface, and the run/thread attribution happens on the other side of it, where `run` is

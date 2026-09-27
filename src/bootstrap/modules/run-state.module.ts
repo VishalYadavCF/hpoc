@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
-import { QueueService } from './queue/queue.service.js';
-import { EventLog } from './event-log/event-log.service.js';
-import { CheckpointService } from './checkpoint/checkpoint.service.js';
-import { OutboxService } from './outbox/outbox.service.js';
-import { ParentWaker } from './run-engine/parent-waker.service.js';
+import { QueueService } from '../../domain/queue/queue.service.js';
+import { EventLog } from '../../domain/event-log/event-log.service.js';
+import { CheckpointService } from '../../domain/checkpoint/checkpoint.service.js';
+import { OutboxService } from '../../domain/outbox/outbox.service.js';
+import { ParentWaker } from '../../domain/run-engine/parent-waker.service.js';
 
 /**
  * A run's durable state: its queue lease, event log, checkpoints, outbox and parent wake-up.
